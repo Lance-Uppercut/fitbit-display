@@ -1,6 +1,6 @@
 GIT_SHA=$(git rev-parse --short HEAD)
 GIT_COMMIT_MESSSAGE=$(git log --format=%B -n 1 $GIT_SHA)
-BIN_FILE_NAME=indoor_hydro-$GIT_SHA
+BIN_FILE_NAME=fitbit-display-$GIT_SHA
 echo $GIT_SHA 
 echo $GIT_COMMIT_MESSAGE
 
