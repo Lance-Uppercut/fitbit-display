@@ -16,7 +16,7 @@
 WiFiClient http;
 
 const int ledPin = LED_BUILTIN;  // the number of the LED pin
-int ledState = LOW;  // ledState used to set the LED
+int ledState = LOW;              // ledState used to set the LED
 
 // Generally, you should use "unsigned long" for variables that hold time
 // The value will quickly become too large for an int to store
@@ -78,11 +78,17 @@ boolean shouldReport = false;
 boolean pumpOn = false;
 void turnOnPump() {
   digitalWrite(ledPin, HIGH);
- // digitalWrite(relayPin, HIGH);
+  // digitalWrite(relayPin, HIGH);
   pumpOn = true;
   updateStatus(deviceId, "powerState", "On");
 }
 
+void turnOnLed() {
+  digitalWrite(LED_BUILTIN, HIGH);
+}
+void turnOffLed() {
+  digitalWrite(LED_BUILTIN, LOW);
+}
 void turnOffPump() {
   digitalWrite(ledPin, LOW);
   //digitalWrite(relayPin, LOW);
@@ -100,9 +106,8 @@ boolean gotPing = false;
 void reconnectIfNoPing() {
 
   if (!gotPing) {
-    TelnetStream.println("No ping received, reconnecting");
-    TelnetStream.print("Is connected?: ");
-    TelnetStream.println(gotPing);
+    TelnetStream.println(F("No ping received, reconnecting"));
+    USE_SERIAL.println(F("No ping received, reconnecting"));
     webSocketClient.disconnect();
     ESP.restart();
   } else {
@@ -132,6 +137,7 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
       }
       break;
     case WStype_TEXT:
+      turnOnLed();
       USE_SERIAL.printf("[WSc] get text: % s\n", payload);
       //14:58:50.193 -> [WSc] get text: CjvJ39w8,powerstate,TurnOn
       deviceIdFromMessage = strtok((char*)payload, ", ");
@@ -160,6 +166,7 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
       } else {
         Serial.print("Unknown command");
       }
+      turnOffLed();
       break;
     case WStype_BIN:
       USE_SERIAL.printf("[WSc] get binary length: % u\n", length);
@@ -190,25 +197,27 @@ void setup() {
   Serial.begin(115200);
   Serial.println("Booting");
 
-  setupOTA("FitbitDevice", mySSID, myPASSWORD);
+  pinMode(LED_BUILTIN, OUTPUT);
 
-//  pinMode(LED_BUILTIN, OUTPUT);
+  setupOTA("FitbitDisplay", mySSID, myPASSWORD);
+
   Serial.println("Connecting to websocket");
 
   webSocketClient.begin(host, 80, path);
+  webSocketClient.setExtraHeaders("Accept=application/json");
   webSocketClient.setAuthorization(user, socketPassword);
   webSocketClient.onEvent(webSocketEvent);
   // try ever 5000 again if connection has failed
-  webSocketClient.setReconnectInterval(5000);
+  webSocketClient.setReconnectInterval(8000);
   // start heartbeat (optional)
   // ping server every 15000 ms
   // expect pong from server within 3000 ms
   // consider connection disconnected if pong is not received 2 times
   webSocketClient.enableHeartbeat(15000, 15000, 2);
 
-  WiFi.setHostname("fitbit-device");
-
-  timer.setInterval(60 * 1000L, reconnectIfNoPing);
+  WiFi.setHostname("fitbit-display");
+//TODO: Only do this when connection
+//  timer.setInterval(60 * 1000L, reconnectIfNoPing);
 }
 
 
@@ -271,3 +280,11 @@ void loop() {
     }
   }
 }
+
+
+//show: 
+// - water intake
+// - calories burned
+// - weight goal
+// . sleep score
+// if excercised today
