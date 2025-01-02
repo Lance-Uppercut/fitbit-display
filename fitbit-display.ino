@@ -5,6 +5,7 @@
 #include <credentials.h>
 #include <WebSocketsClient.h>
 #include <SimpleTimer.h>
+#include <ArduinoJson.h>
 
 
 //#include <ESP8266httpUpdate.h>
@@ -43,8 +44,11 @@ void updateStatus(char* deviceId, char* state, char* newState) {
   if (webSocketClient.isConnected()) {
     char powerstate[4];
     strcpy(powerstate, newState);
+    //char s[256];
+    //sprintf(s, "%s=%s,deviceId=%s", state, newState, deviceId);
     char s[256];
-    sprintf(s, "%s=%s,deviceId=%s", state, newState, deviceId);
+    sprintf(s, "{\"%s\":\"% s\",\"deviceId\":\"% s\"}", state, newState, deviceId);
+
     Serial.print("Sending text: ");
     Serial.println(s);
     TelnetStream.print("Sending text: ");
@@ -80,7 +84,7 @@ void turnOnPump() {
   digitalWrite(ledPin, HIGH);
   // digitalWrite(relayPin, HIGH);
   pumpOn = true;
-  updateStatus(deviceId, "powerState", "On");
+  updateStatus(deviceId, "powerstate", "On");
 }
 
 void turnOnLed() {
@@ -93,7 +97,7 @@ void turnOffPump() {
   digitalWrite(ledPin, LOW);
   //digitalWrite(relayPin, LOW);
   pumpOn = false;
-  updateStatus(deviceId, "powerState", "Off");
+  updateStatus(deviceId, "powerstate", "Off");
 }
 // a function to be executed periodically
 
@@ -114,7 +118,50 @@ void reconnectIfNoPing() {
     gotPing = false;
   }
 }
+void handleCommand(const String& payload, size_t length) {
+  const char* deviceIdFromMessage;
+  const char* command;
+  const char* commandValue;
+  //  const size_t capacity = JSON_OBJECT_SIZE(2) + 20;  //Memory pool
 
+  //  DynamicJsonDocument doc(length);
+  StaticJsonDocument<200> doc;
+
+  DeserializationError error = deserializeJson(doc, payload);
+
+  if (error) {
+    Serial.print(F("deserializeJson() returned "));
+    Serial.println(error.c_str());
+    return;
+  }
+
+  deviceIdFromMessage = doc["endpointId"];
+  command = "powerstate";
+  commandValue = doc["powerstate"];
+
+  Serial.print("Command: ");
+  Serial.println(command);
+  Serial.print("Value: ");
+  Serial.println(commandValue);
+
+  TelnetStream.print("Command: ");
+  TelnetStream.println(command);
+  TelnetStream.print("Value: ");
+  TelnetStream.println(commandValue);
+  if (strcmp(command, "powerstate") == 0) {
+    if (strcmp(commandValue, "TurnOn") == 0) {
+      turnOnPump();
+    } else if (strcmp(commandValue, "TurnOff") == 0) {
+      turnOffPump();
+    }
+    shouldReport = true;
+  } else if (strcmp(command, "nextVersion") == 0) {
+    Serial.println(F("Should do OTA213"));
+    TelnetStream.println(F("Should do ota?"));
+  } else {
+    Serial.print("Unknown command");
+  }
+}
 
 void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
   char* deviceIdFromMessage;
@@ -123,6 +170,9 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
   switch (type) {
     case WStype_DISCONNECTED:
       USE_SERIAL.printf("[WSc] Disconnected!\n");
+      break;
+    case WStype_ERROR:
+      USE_SERIAL.printf("[WSc] Error: %s s\n", payload);
       break;
     case WStype_CONNECTED:
       {
@@ -139,34 +189,8 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
     case WStype_TEXT:
       turnOnLed();
       USE_SERIAL.printf("[WSc] get text: % s\n", payload);
-      //14:58:50.193 -> [WSc] get text: CjvJ39w8,powerstate,TurnOn
-      deviceIdFromMessage = strtok((char*)payload, ", ");
-      command = strtok(NULL, ", ");
-      commandValue = strtok(NULL, ", ");
-      Serial.print("Command: ");
-      Serial.println(command);
-      Serial.print("Value: ");
-      Serial.println(commandValue);
+      handleCommand(String((char*)payload), length);
 
-      TelnetStream.print("Command: ");
-      TelnetStream.println(command);
-      TelnetStream.print("Value: ");
-      TelnetStream.println(commandValue);
-
-      if (strcmp(command, "powerstate") == 0) {
-        if (strcmp(commandValue, "TurnOn") == 0) {
-          turnOnPump();
-        } else if (strcmp(commandValue, "TurnOff") == 0) {
-          turnOffPump();
-        }
-        shouldReport = true;
-      } else if (strcmp(command, "nextVersion") == 0) {
-        Serial.println(F("Should do OTA213"));
-        TelnetStream.println(F("Should do ota?"));
-      } else {
-        Serial.print("Unknown command");
-      }
-      turnOffLed();
       break;
     case WStype_BIN:
       USE_SERIAL.printf("[WSc] get binary length: % u\n", length);
@@ -204,7 +228,7 @@ void setup() {
   Serial.println("Connecting to websocket");
 
   webSocketClient.begin(host, 80, path);
-  webSocketClient.setExtraHeaders("Accept=application/json");
+  webSocketClient.setExtraHeaders("Accept: application/json");
   webSocketClient.setAuthorization(user, socketPassword);
   webSocketClient.onEvent(webSocketEvent);
   // try ever 5000 again if connection has failed
@@ -216,8 +240,8 @@ void setup() {
   webSocketClient.enableHeartbeat(15000, 15000, 2);
 
   WiFi.setHostname("fitbit-display");
-//TODO: Only do this when connection
-//  timer.setInterval(60 * 1000L, reconnectIfNoPing);
+  //TODO: Only do this when connection
+  //  timer.setInterval(60 * 1000L, reconnectIfNoPing);
 }
 
 
@@ -242,11 +266,13 @@ void loop() {
       Serial.println("Reporting pump off");
     }
 
-    char s[256];
-    sprintf(s, "powerstate = % s, deviceId = % s", powerstate, deviceId);
+    //    char s[256];
+    //  sprintf(s, "{\"powerstate\":\"% s\",\"deviceId\":\"% s\"}", powerstate, deviceId);
     Serial.print("Sending text: ");
-    Serial.println(s);
-    webSocketClient.sendTXT(s);
+    //  Serial.println(s);
+    updateStatus(deviceId, "powerstate", powerstate);
+
+    //webSocketClient.sendTXT(s);
   }
 
   if (TelnetStream.available() > 0) {
@@ -282,7 +308,7 @@ void loop() {
 }
 
 
-//show: 
+//show:
 // - water intake
 // - calories burned
 // - weight goal
