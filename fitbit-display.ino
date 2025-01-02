@@ -6,6 +6,7 @@
 #include <WebSocketsClient.h>
 #include <SimpleTimer.h>
 #include <ArduinoJson.h>
+#include <FastLED.h>
 
 
 //#include <ESP8266httpUpdate.h>
@@ -39,6 +40,14 @@ char deviceId[] = "CjvJ39w8";
 #define USE_SERIAL Serial
 
 SimpleTimer timer;
+
+void turnOnLed() {
+  digitalWrite(LED_BUILTIN, HIGH);
+}
+void turnOffLed() {
+  digitalWrite(LED_BUILTIN, LOW);
+}
+
 
 void updateStatus(char* deviceId, char* state, char* newState) {
   if (webSocketClient.isConnected()) {
@@ -77,25 +86,34 @@ void reportIPAddress() {
   updateStatus(deviceId, "ipaddress", ipaddressString);
 }
 
+void getFitbitWeight() {
+  Serial.println("Getting fitbit weight");
+  //taking the easy road of just sending strings
+  webSocketClient.sendTXT("{\"fitbit.get.weight\":\"\"}");
+}
+void getFitbitWeightGoal() {
+  //taking the easy road of just sending strings
+  Serial.println("Getting fitbit weightgoal");
+  updateStatus(deviceId, "fitbit.get.weight.goal", "");
+  //  webSocketClient.sendTXT("{\"fitbit.get.weight.goal\":\"\"}");
+}
+void getFitbitDailyActivities() {
+  //taking the easy road of just sending strings
+  Serial.println("Getting fitbit activities");
+  updateStatus(deviceId, "fitbit.activities", "");
+  //  webSocketClient.sendTXT("{\"fitbit.get.weight.goal\":\"\"}");
+}
 
 boolean shouldReport = false;
 boolean pumpOn = false;
 void turnOnPump() {
-  digitalWrite(ledPin, HIGH);
-  // digitalWrite(relayPin, HIGH);
+  turnOnLed();
   pumpOn = true;
   updateStatus(deviceId, "powerstate", "On");
 }
 
-void turnOnLed() {
-  digitalWrite(LED_BUILTIN, HIGH);
-}
-void turnOffLed() {
-  digitalWrite(LED_BUILTIN, LOW);
-}
 void turnOffPump() {
-  digitalWrite(ledPin, LOW);
-  //digitalWrite(relayPin, LOW);
+  turnOffLed();
   pumpOn = false;
   updateStatus(deviceId, "powerstate", "Off");
 }
@@ -118,49 +136,49 @@ void reconnectIfNoPing() {
     gotPing = false;
   }
 }
+
 void handleCommand(const String& payload, size_t length) {
   const char* deviceIdFromMessage;
   const char* command;
   const char* commandValue;
   //  const size_t capacity = JSON_OBJECT_SIZE(2) + 20;  //Memory pool
-
-  //  DynamicJsonDocument doc(length);
-  StaticJsonDocument<200> doc;
-
+  //{"bodyWeight.powerstate":"TurnOn","endpointId":"CjvJ39w8"}
+  // {"endpointId":"CjvJ39w8","powerstate":"TurnOn"}
+  DynamicJsonDocument doc(length);
   DeserializationError error = deserializeJson(doc, payload);
-
   if (error) {
     Serial.print(F("deserializeJson() returned "));
     Serial.println(error.c_str());
     return;
   }
-
-  deviceIdFromMessage = doc["endpointId"];
-  command = "powerstate";
-  commandValue = doc["powerstate"];
-
-  Serial.print("Command: ");
-  Serial.println(command);
-  Serial.print("Value: ");
-  Serial.println(commandValue);
-
-  TelnetStream.print("Command: ");
-  TelnetStream.println(command);
-  TelnetStream.print("Value: ");
-  TelnetStream.println(commandValue);
-  if (strcmp(command, "powerstate") == 0) {
+  if (doc.containsKey("powerstate")) {
+    commandValue = doc["powerstate"];
+    Serial.print(F("Handling powerstate: "));
+    Serial.println(commandValue);
     if (strcmp(commandValue, "TurnOn") == 0) {
       turnOnPump();
     } else if (strcmp(commandValue, "TurnOff") == 0) {
       turnOffPump();
     }
     shouldReport = true;
-  } else if (strcmp(command, "nextVersion") == 0) {
-    Serial.println(F("Should do OTA213"));
-    TelnetStream.println(F("Should do ota?"));
+  } else if (doc.containsKey("weight")) {
+    float weight = doc["weight"];
+    float bmi = doc["bmi"];
+    Serial.printf("Weight: %s\n", weight);
+    Serial.printf("bmi: %s\n", bmi);
+  } else if (doc.containsKey("bodyWeight.powerstate")) {
+    getFitbitWeight();
+  } else if (doc.containsKey("weightGoal.powerstate")) {
+    //{"endpointId":"CjvJ39w8","weightGoal.powerstate":"TurnOff"}
+    getFitbitWeightGoal();
+  } else if (doc.containsKey("dailyActivities.powerstate")) {
+    //{"endpointId":"CjvJ39w8","weightGoal.powerstate":"TurnOff"}
+    getFitbitWeightGoal();
   } else {
     Serial.print("Unknown command");
   }
+  Serial.println(F("Done"));
+  Serial.flush();
 }
 
 void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
@@ -241,7 +259,9 @@ void setup() {
 
   WiFi.setHostname("fitbit-display");
   //TODO: Only do this when connection
-  //  timer.setInterval(60 * 1000L, reconnectIfNoPing);
+  timer.setInterval(60 * 1000L, reconnectIfNoPing);
+  Serial.println("Setup done");
+  Serial.flush();
 }
 
 
@@ -253,27 +273,6 @@ void loop() {
   webSocketClient.loop();
   timer.run();
 
-  // Your code here
-  if (shouldReport) {
-    shouldReport = false;
-    Serial.println("Pump state changed. Reporting");
-    char powerstate[4];
-    if (pumpOn) {
-      strcpy(powerstate, "On");
-      Serial.println("Reporting pump on");
-    } else {
-      strcpy(powerstate, "Off");
-      Serial.println("Reporting pump off");
-    }
-
-    //    char s[256];
-    //  sprintf(s, "{\"powerstate\":\"% s\",\"deviceId\":\"% s\"}", powerstate, deviceId);
-    Serial.print("Sending text: ");
-    //  Serial.println(s);
-    updateStatus(deviceId, "powerstate", powerstate);
-
-    //webSocketClient.sendTXT(s);
-  }
 
   if (TelnetStream.available() > 0) {
     char inChar = TelnetStream.read();
@@ -291,6 +290,15 @@ void loop() {
         break;
       case '2':
         turnOffPump();
+        break;
+      case '3':
+        getFitbitWeight();
+        break;
+      case '4':
+        getFitbitWeightGoal();
+        break;
+      case '5':
+        getFitbitDailyActivities();
         break;
       case 't':
         turnOnPump();
