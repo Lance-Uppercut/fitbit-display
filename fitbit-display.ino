@@ -7,8 +7,10 @@
 #include <SimpleTimer.h>
 #include <ArduinoJson.h>
 #include <FastLED.h>
-
-
+#include "WaterGoalHandler.cpp"
+#include "SleepGoalHandler.cpp"
+#include "CaloriesGoalHandler.cpp"
+#include "Context.h"
 //#include <ESP8266httpUpdate.h>
 //#include <ESP8266HTTPClient.h>
 #include "buildTime.h"
@@ -25,9 +27,6 @@ int ledState = LOW;              // ledState used to set the LED
 unsigned long previousMillis = 0;  // will store last time LED was updated
 
 WebSocketsClient webSocketClient;
-//WiFiClient client;
-
-
 //for prod
 //char host[] = "www.offbeat-iot.com";
 char host[] = "soeren.herokuapp.com";
@@ -37,7 +36,19 @@ char socketPassword[] = "Rxxy4cH9";
 char path[] = "/ws?device=CjvJ39w8";
 char deviceId[] = "CjvJ39w8";
 
+
+#define NUM_LEDS 60
+#define DATA_PIN 16
+CRGB leds[NUM_LEDS];
 #define USE_SERIAL Serial
+
+// Create the context
+Context context;
+
+// Create handlers
+WaterGoalHandler waterHandler(context);
+CaloriesGoalHandler caloriesHandler(context);
+SleepGoalHandler sleepHandler(context);
 
 SimpleTimer timer;
 
@@ -91,6 +102,7 @@ void getFitbitWeight() {
   //taking the easy road of just sending strings
   webSocketClient.sendTXT("{\"fitbit.get.weight\":\"\"}");
 }
+
 void getFitbitWeightGoal() {
   //taking the easy road of just sending strings
   Serial.println("Getting fitbit weightgoal");
@@ -144,7 +156,7 @@ void handleCommand(const String& payload, size_t length) {
   //  const size_t capacity = JSON_OBJECT_SIZE(2) + 20;  //Memory pool
   //{"bodyWeight.powerstate":"TurnOn","endpointId":"CjvJ39w8"}
   // {"endpointId":"CjvJ39w8","powerstate":"TurnOn"}
-  DynamicJsonDocument doc(length);
+  DynamicJsonDocument doc(length + 4);
   DeserializationError error = deserializeJson(doc, payload);
   if (error) {
     Serial.print(F("deserializeJson() returned "));
@@ -163,9 +175,13 @@ void handleCommand(const String& payload, size_t length) {
     shouldReport = true;
   } else if (doc.containsKey("weight")) {
     float weight = doc["weight"];
+    Serial.printf("Weight: %3.2f\n", weight);
+  } else if (doc.containsKey("bmi")) {
     float bmi = doc["bmi"];
-    Serial.printf("Weight: %s\n", weight);
-    Serial.printf("bmi: %s\n", bmi);
+    Serial.printf("bmi: %2.2f\n", bmi);
+  } else if (doc.containsKey("weightUnit")) {
+    String weightUnit = doc["weightUnit"];
+    Serial.printf("weightUnit: %s\n", weightUnit);
   } else if (doc.containsKey("bodyWeight.powerstate")) {
     getFitbitWeight();
   } else if (doc.containsKey("weightGoal.powerstate")) {
@@ -173,7 +189,31 @@ void handleCommand(const String& payload, size_t length) {
     getFitbitWeightGoal();
   } else if (doc.containsKey("dailyActivities.powerstate")) {
     //{"endpointId":"CjvJ39w8","weightGoal.powerstate":"TurnOff"}
-    getFitbitWeightGoal();
+    getFitbitDailyActivities();
+  } else if (doc.containsKey("getBody.powerstate")) {
+    //{"endpointId":"CjvJ39w8","weightGoal.powerstate":"TurnOff"}
+    updateStatus(deviceId, "fitbit.get.body", "");
+  } else if (doc.containsKey("weightGoal")) {
+    Serial.println("Parsing1");
+    Serial.flush();
+    //{"endpointId":"CjvJ39w8","weightGoal":{"goalType":"LOSE","startDate":"2024-11-26","startWeight":100.0,"weight":98.0,"weightThreshold":0.05}}
+    float startWeight = doc["weightGoal"]["startWeight"];
+    Serial.printf("startWeight: %3.2f\n", startWeight);
+    float targetWeight = doc["weightGoal"]["weight"];
+    Serial.printf("targetWeight: %3.2f\n", targetWeight);
+  } else if (doc.containsKey("caloriesOut")) {
+    //{"endpointId":"CjvJ39w8","caloriesOut":178,"activityCalories":0,"steps":0,"veryActiveMinutes":0,"caloriesBMR":173,"sedentaryMinutes":129}
+    int caloriesOut = doc["caloriesOut"];
+    Serial.printf("caloriesOut: %4d\n", caloriesOut);
+    int activityCalories = doc["activityCalories"];
+    Serial.printf("activityCalories: %4d\n", caloriesOut);
+
+    //{"endpointId":"CjvJ39w8","weightGoal.powerstate":"TurnOff"}
+    //    updateStatus(deviceId, "fitbit.get.body", "");
+  } else if (doc.containsKey("currentWeight.powerstate")) {
+    updateStatus(deviceId, "fitbit.get.current.weight", "");
+  } else if (doc.containsKey("weight")) {
+    updateStatus(deviceId, "fitbit.get.current.weight", "");
   } else {
     Serial.print("Unknown command");
   }
@@ -237,9 +277,19 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
 
 void setup() {
   Serial.begin(115200);
+  delay(75);
   Serial.println("Booting");
 
+  Serial.print(F("Sketch:   " __FILE__ "\n"
+                 "Compiled: " __DATE__ " " __TIME__ "\n\n"));
+
+
   pinMode(LED_BUILTIN, OUTPUT);
+  turnOnLed();
+
+  // Link the chain
+  waterHandler.setNext(&caloriesHandler);
+  caloriesHandler.setNext(&sleepHandler);
 
   setupOTA("FitbitDisplay", mySSID, myPASSWORD);
 
@@ -260,8 +310,12 @@ void setup() {
   WiFi.setHostname("fitbit-display");
   //TODO: Only do this when connection
   timer.setInterval(60 * 1000L, reconnectIfNoPing);
+
+  FastLED.addLeds<NEOPIXEL, DATA_PIN>(leds, NUM_LEDS);
+
   Serial.println("Setup done");
   Serial.flush();
+  turnOffLed();
 }
 
 
