@@ -6,11 +6,11 @@
 #include <WebSocketsClient.h>
 #include <SimpleTimer.h>
 #include <ArduinoJson.h>
-#include <FastLED.h>
 #include "WaterGoalHandler.cpp"
 #include "SleepGoalHandler.cpp"
 #include "CaloriesGoalHandler.cpp"
 #include "WeightGoalHandler.cpp"
+#include "LedModeHandler.cpp"
 #include "Context.h"
 //#include <ESP8266httpUpdate.h>
 //#include <ESP8266HTTPClient.h>
@@ -37,10 +37,6 @@ char socketPassword[] = "Rxxy4cH9";
 char path[] = "/ws?device=CjvJ39w8";
 char deviceId[] = "CjvJ39w8";
 
-
-#define NUM_LEDS 60
-#define DATA_PIN 16
-CRGB leds[NUM_LEDS];
 #define USE_SERIAL Serial
 
 // Create the context
@@ -51,8 +47,11 @@ WaterGoalHandler waterHandler(context);
 CaloriesGoalHandler caloriesHandler(context);
 SleepGoalHandler sleepHandler(context);
 WeightGoalHandler weightGoalHandler(context);
-
+LedModeHandler ledModeHandler(context);
 SimpleTimer timer;
+
+
+String currentModeAsString = String("off");
 
 void turnOnLed() {
   digitalWrite(LED_BUILTIN, HIGH);
@@ -130,6 +129,10 @@ void turnOffPump() {
   turnOffLed();
   pumpOn = false;
   updateStatus(deviceId, "powerstate", "Off");
+}
+
+void reportMode() {
+  updateStatus(deviceId, "ledControl", (char*)currentModeAsString.c_str());
 }
 // a function to be executed periodically
 
@@ -227,6 +230,12 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
         shouldReport = true;
         reportVersion();
         updateStatus(deviceId, "myVersion", (char*)theVersion);
+        // try to update modes. Send the instance of the mode and which mode is active. Easy peasy
+        //disco
+        //contextDriven
+        //off
+        reportMode();
+        
       }
       break;
     case WStype_TEXT:
@@ -275,9 +284,10 @@ void setup() {
   // Link the chain
   waterHandler.setNext(&caloriesHandler);
   caloriesHandler.setNext(&sleepHandler);
-  sleepHandler.setNext(&weightGoalHandler); 
+  sleepHandler.setNext(&weightGoalHandler);
+  weightGoalHandler.setNext(&ledModeHandler);
 
-    setupOTA("FitbitDisplay", mySSID, myPASSWORD);
+  setupOTA("FitbitDisplay", mySSID, myPASSWORD);
 
   Serial.println("Connecting to websocket");
 
@@ -297,8 +307,6 @@ void setup() {
   //TODO: Only do this when connection
   timer.setInterval(60 * 1000L, reconnectIfNoPing);
 
-  FastLED.addLeds<NEOPIXEL, DATA_PIN>(leds, NUM_LEDS);
-
   Serial.println("Setup done");
   Serial.flush();
   turnOffLed();
@@ -311,8 +319,12 @@ void loop() {
   ArduinoOTA.handle();
   //#endif
   webSocketClient.loop();
-  timer.run();
 
+  String modeRightNow = ledModeHandler.run();
+  if (modeRightNow.compareTo(currentModeAsString) != 0) {
+    currentModeAsString = modeRightNow;
+    reportMode();
+  }
 
   if (TelnetStream.available() > 0) {
     char inChar = TelnetStream.read();

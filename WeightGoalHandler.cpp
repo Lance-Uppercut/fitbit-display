@@ -1,6 +1,5 @@
 #include <ArduinoJson.h>
 #include "Handler.h"  // Include the correct header for Handler class
-//#include "Context.h"      // Include the Context header to access the Context class
 
 class WeightGoalHandler : public Handler {
 public:
