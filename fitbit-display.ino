@@ -16,6 +16,15 @@
 //#include <ESP8266HTTPClient.h>
 #include "buildTime.h"
 #include "version.h"
+#include <DHT.h>
+
+
+#define DHTPIN 14       //(rød gpio0, pin D3) (3,3 volt)
+#define DHTTYPE DHT11   // DHT 11
+//#define DHTTYPE DHT22  // DHT 22  (AM2302), AM2321
+float temperature = 0;
+float humidity = 0;
+DHT dht(DHTPIN, DHTTYPE);
 
 
 WiFiClient http;
@@ -98,6 +107,17 @@ void reportIPAddress() {
   updateStatus(deviceId, "ipaddress", ipaddressString);
 }
 
+void getWater(){
+  //{"endpointId":"${endpointId}","fitbit.get.water":{"water":0.0}}      
+    updateStatus(deviceId, "fitbit.get.water", "");
+}
+
+void getWaterGoal(){
+  //{"endpointId":"${endpointId}","fitbit.get.water.goal":{"goal":24,"startDate":"2019-03-21"}}
+    updateStatus(deviceId, "fitbit.get.water.goal", "");
+
+}
+
 void getFitbitWeight() {
   Serial.println("Getting fitbit weight");
   //taking the easy road of just sending strings
@@ -115,6 +135,10 @@ void getFitbitDailyActivities() {
   Serial.println("Getting fitbit activities");
   updateStatus(deviceId, "fitbit.activities", "");
   //  webSocketClient.sendTXT("{\"fitbit.get.weight.goal\":\"\"}");
+}
+
+void getCurrentWeight() {
+  updateStatus(deviceId, "fitbit.get.current.weight", "");
 }
 
 boolean shouldReport = false;
@@ -153,6 +177,49 @@ void reconnectIfNoPing() {
     gotPing = false;
   }
 }
+
+
+void calculateTempHum() {
+
+  // Reading temperature or humidity takes about 250 milliseconds!
+  // Sensor readings may also be up to 2 seconds 'old' (its a very slow sensor)
+  float h = dht.readHumidity();
+  // Read temperature as Celsius (the default)
+  float t = dht.readTemperature();
+  // Read temperature as Fahrenheit (isFahrenheit = true)
+  float f = dht.readTemperature(true);
+
+  // Check if any reads failed and exit early (to try again).
+  if (isnan(h) || isnan(t) || isnan(f)) {
+    USE_SERIAL.println("Failed to read from DHT sensor!");
+    //turnOffDht();
+    //timer.setTimeout(2500, turnOnDht);
+    return;
+  }
+
+  temperature = t;
+  humidity = h;
+
+  // Compute heat index in Fahrenheit (the default)
+  float hif = dht.computeHeatIndex(f, h);
+  // Compute heat index in Celsius (isFahreheit = false)
+  float hic = dht.computeHeatIndex(t, h, false);
+
+  USE_SERIAL.print("Humidity: ");
+  USE_SERIAL.print(h);
+  USE_SERIAL.print(" %\t");
+  USE_SERIAL.print("Temperature: ");
+  USE_SERIAL.print(t);
+  USE_SERIAL.print(" *C ");
+  USE_SERIAL.print(f);
+  USE_SERIAL.print(" *F\t");
+  USE_SERIAL.print("Heat index: ");
+  USE_SERIAL.print(hic);
+  USE_SERIAL.print(" *C ");
+  USE_SERIAL.print(hif);
+  USE_SERIAL.println(" *F");
+}
+
 
 void handleCommand(const String& payload, size_t length) {
   const char* deviceIdFromMessage;
@@ -199,12 +266,14 @@ void handleCommand(const String& payload, size_t length) {
     //{"endpointId":"CjvJ39w8","weightGoal.powerstate":"TurnOff"}
     //    updateStatus(deviceId, "fitbit.get.body", "");
   } else if (doc.containsKey("currentWeight.powerstate")) {
-    updateStatus(deviceId, "fitbit.get.current.weight", "");
+    getCurrentWeight();
   } else {
     Serial.print("Unknown command");
     Serial.flush();
     waterHandler.handle(doc);
   }
+
+  context.printStatus();
   Serial.println(F("Done"));
   Serial.flush();
 }
@@ -235,7 +304,13 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
         //contextDriven
         //off
         reportMode();
-        
+        //TODO: perhaps it could make sense to add an asycnt method
+        getFitbitWeight();
+        getFitbitWeightGoal();
+        getFitbitDailyActivities();
+        getCurrentWeight();
+        getWater();
+        getWaterGoal();
       }
       break;
     case WStype_TEXT:
@@ -280,6 +355,8 @@ void setup() {
 
   pinMode(LED_BUILTIN, OUTPUT);
   turnOnLed();
+  calculateTempHum();
+
 
   // Link the chain
   waterHandler.setNext(&caloriesHandler);
@@ -306,6 +383,7 @@ void setup() {
   WiFi.setHostname("fitbit-display");
   //TODO: Only do this when connection
   timer.setInterval(60 * 1000L, reconnectIfNoPing);
+  timer.setInterval(10 * 1000, calculateTempHum);
 
   Serial.println("Setup done");
   Serial.flush();
