@@ -33,7 +33,7 @@ public:
 
       float weightLossInPercent = (startWeight - currentWeight) / (currentWeight - targetWeight);
       Serial.printf("weightLossInPercent: %3.2f\n", weightLossInPercent);
-      context.weightReachedPercent = weightLossInPercent;
+      context.weightGoalReachedPercent = weightLossInPercent;
     }
     Handler::handle(doc);
   }

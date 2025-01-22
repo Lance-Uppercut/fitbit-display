@@ -52,6 +52,7 @@ public:
           }
           FastLED.show();
         }
+        Serial.println("Updated for fitbit goals");
         isOn = false;
         //        delay(75);
 

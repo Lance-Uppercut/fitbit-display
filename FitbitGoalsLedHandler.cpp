@@ -14,6 +14,8 @@ private:
   static constexpr int FITBIT_GOALS = 2;
 
   CRGBArray<NUM_LEDS> leds;
+  CRGB leds[4][60];
+
   bool isOn = false;
   long red, green, blue, ledIndex;
   String currentModeAsString = String("off");

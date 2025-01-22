@@ -19,7 +19,7 @@
 #include <DHT.h>
 
 
-#define DHTPIN 14       //(rød gpio0, pin D3) (3,3 volt)
+#define DHTPIN 32       //(rød gpio0, pin D3) (3,3 volt)
 #define DHTTYPE DHT11   // DHT 11
 //#define DHTTYPE DHT22  // DHT 22  (AM2302), AM2321
 float temperature = 0;
@@ -355,6 +355,7 @@ void setup() {
 
   pinMode(LED_BUILTIN, OUTPUT);
   turnOnLed();
+  dht.begin();
   calculateTempHum();
 
 
