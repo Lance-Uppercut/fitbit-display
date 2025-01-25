@@ -19,8 +19,8 @@
 #include <DHT.h>
 
 
-#define DHTPIN 32       //(rød gpio0, pin D3) (3,3 volt)
-#define DHTTYPE DHT11   // DHT 11
+#define DHTPIN 32      //(rød gpio0, pin D3) (3,3 volt)
+#define DHTTYPE DHT11  // DHT 11
 //#define DHTTYPE DHT22  // DHT 22  (AM2302), AM2321
 float temperature = 0;
 float humidity = 0;
@@ -107,15 +107,23 @@ void reportIPAddress() {
   updateStatus(deviceId, "ipaddress", ipaddressString);
 }
 
-void getWater(){
-  //{"endpointId":"${endpointId}","fitbit.get.water":{"water":0.0}}      
-    updateStatus(deviceId, "fitbit.get.water", "");
+void getWater() {
+  //{"endpointId":"${endpointId}","fitbit.get.water":{"water":0.0}}
+  updateStatus(deviceId, "fitbit.get.water", "");
+}
+void getSleep() {
+  //{"endpointId":"${endpointId}","fitbit.get.water":{"water":0.0}}
+  updateStatus(deviceId, "fitbit.get.sleep", "");
 }
 
-void getWaterGoal(){
+void getSleepGoal() {
   //{"endpointId":"${endpointId}","fitbit.get.water.goal":{"goal":24,"startDate":"2019-03-21"}}
-    updateStatus(deviceId, "fitbit.get.water.goal", "");
+  updateStatus(deviceId, "fitbit.get.sleep.goal", "");
+}
 
+void getWaterGoal() {
+  //{"endpointId":"${endpointId}","fitbit.get.water.goal":{"goal":24,"startDate":"2019-03-21"}}
+  updateStatus(deviceId, "fitbit.get.water.goal", "");
 }
 
 void getFitbitWeight() {
@@ -256,19 +264,10 @@ void handleCommand(const String& payload, size_t length) {
   } else if (doc.containsKey("getBody.powerstate")) {
     //{"endpointId":"CjvJ39w8","weightGoal.powerstate":"TurnOff"}
     updateStatus(deviceId, "fitbit.get.body", "");
-  } else if (doc.containsKey("caloriesOut")) {
-    //{"endpointId":"CjvJ39w8","caloriesOut":178,"activityCalories":0,"steps":0,"veryActiveMinutes":0,"caloriesBMR":173,"sedentaryMinutes":129}
-    int caloriesOut = doc["caloriesOut"];
-    Serial.printf("caloriesOut: %4d\n", caloriesOut);
-    int activityCalories = doc["activityCalories"];
-    Serial.printf("activityCalories: %4d\n", caloriesOut);
-
-    //{"endpointId":"CjvJ39w8","weightGoal.powerstate":"TurnOff"}
-    //    updateStatus(deviceId, "fitbit.get.body", "");
   } else if (doc.containsKey("currentWeight.powerstate")) {
     getCurrentWeight();
   } else {
-    Serial.print("Unknown command");
+    Serial.print("Unknown command. Sending through chain");
     Serial.flush();
     waterHandler.handle(doc);
   }
@@ -299,11 +298,13 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
         shouldReport = true;
         reportVersion();
         updateStatus(deviceId, "myVersion", (char*)theVersion);
+        updateStatus(deviceId, "sync", "setMode");
+
         // try to update modes. Send the instance of the mode and which mode is active. Easy peasy
         //disco
         //contextDriven
         //off
-        reportMode();
+        //        reportMode();
         //TODO: perhaps it could make sense to add an asycnt method
         getFitbitWeight();
         getFitbitWeightGoal();
@@ -311,6 +312,9 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
         getCurrentWeight();
         getWater();
         getWaterGoal();
+        getSleep();
+        getSleepGoal();
+        
       }
       break;
     case WStype_TEXT:

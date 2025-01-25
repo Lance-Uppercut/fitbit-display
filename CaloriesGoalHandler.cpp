@@ -17,6 +17,13 @@ public:
     if (doc.containsKey("caloriesOut")) {
       caloriesOut = doc["caloriesOut"];
       context.caloriesGoalReachedPercent = caloriesOut / 2500.0;
+
+      Serial.print("Cals goal: ");
+      Serial.print(2500.0);
+      Serial.print(" caloriesOut: ");
+      Serial.print(caloriesOut);
+      Serial.print("%: ");
+      Serial.println(context.caloriesGoalReachedPercent);
     }
 
 

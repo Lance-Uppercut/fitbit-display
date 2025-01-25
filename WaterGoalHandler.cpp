@@ -17,7 +17,14 @@ public:
       water = doc["fitbit.get.water"]["water"];
     } else if (doc.containsKey("fitbit.get.water.goal")) {
       goal = doc["fitbit.get.water.goal"]["goal"];
-      context.waterGoalReachedPercent = (water / goal) * 1.0;
+      context.waterGoalReachedPercent = (water / goal);
+      Serial.print("Water goal: ");
+      Serial.print(goal);
+      Serial.print(" Water: ");
+      Serial.print(water);
+      Serial.print("%: ");
+      Serial.println(context.waterGoalReachedPercent);
+      
     }
 
     Handler::handle(doc);
