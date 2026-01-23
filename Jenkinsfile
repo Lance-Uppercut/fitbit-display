@@ -11,9 +11,9 @@ pipeline {
         sh '''
           set -eu
           if command -v python3 >/dev/null 2>&1; then
-            python3 -m pip install --upgrade pip platformio || python3 -m pip install --user --upgrade pip platformio
+            python3 -m pip install --upgrade pip platformio intelhex || python3 -m pip install --user --upgrade pip platformio intelhex
           elif command -v python >/dev/null 2>&1; then
-            python -m pip install --upgrade pip platformio || python -m pip install --user --upgrade pip platformio
+            python -m pip install --upgrade pip platformio intelhex || python -m pip install --user --upgrade pip platformio intelhex
           else
             echo "Python not found on build agent" >&2
             exit 1
