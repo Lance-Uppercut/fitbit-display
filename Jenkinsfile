@@ -1,6 +1,9 @@
 pipeline {
   agent { label 'build' }
   options { timestamps() }
+  environment {
+    GITHUB_CREDS = credentials('github')
+  }
 
   stages {
     stage('Setup') {
@@ -23,6 +26,7 @@ pipeline {
       steps {
         sh '''
           set -eu
+          git config --global url."https://x-access-token:${GITHUB_CREDS_PSW}@github.com/".insteadOf "https://github.com/"
           if command -v platformio >/dev/null 2>&1; then
             PIO=platformio
           elif [ -x "$HOME/.local/bin/platformio" ]; then
