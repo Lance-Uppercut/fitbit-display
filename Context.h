@@ -6,22 +6,24 @@
 
 class Context {
 public:
-    float waterGoalReachedPercent = 0.0f;
-    float caloriesGoalReachedPercent = 0.0f;
-    float sleepGoalReachedPercent = 0.0f;
-    float weightGoalReachedPercent = 0.0f;
-    float currentWeight = 0.0f;
-    void printStatus() const {
-        Serial.print("Water Goal: ");
-        Serial.print(waterGoalReachedPercent);
-        Serial.print("%, Calories Goal: ");
-        Serial.print(caloriesGoalReachedPercent);
-        Serial.print("%, Weight Goal: ");
-        Serial.print(weightGoalReachedPercent);
-        Serial.print("%, Sleep Goal: ");
-        Serial.print(sleepGoalReachedPercent);
-        Serial.println("%");
-    }
+  float waterGoalReachedPercent = 0.0f;
+  float caloriesGoalReachedPercent = 0.0f;
+  float sleepGoalReachedPercent = 0.0f;
+  float weightGoalReachedPercent = 0.0f;
+  float currentWeight = 0.0f;
+  float stepsGoalReachedPercent = 0.0f;
+  
+  void printStatus(Stream& stream) const {
+    stream.print("Water Goal: ");
+    stream.print(waterGoalReachedPercent);
+    stream.print("%, Calories Goal: ");
+    stream.print(caloriesGoalReachedPercent);
+    stream.print("%, Steps Goal: ");
+    stream.print(stepsGoalReachedPercent);
+    stream.print("%, Sleep Goal: ");
+    stream.print(sleepGoalReachedPercent);
+    stream.println("%");
+  }
 };
 
 #endif

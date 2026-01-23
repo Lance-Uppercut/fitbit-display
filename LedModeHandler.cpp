@@ -5,13 +5,10 @@
 class LedModeHandler : public Handler {
 private:
   static constexpr uint8_t NUM_LEDS = 8;
-//  static constexpr uint8_t SLEEP_LED_PIN = 4;
-  //static constexpr uint8_t WATER_LED_PIN = 19;
   static constexpr uint8_t SLEEP_LED_PIN = 19;
   static constexpr uint8_t WATER_LED_PIN = 4;
   static constexpr uint8_t CALS_LED_PIN = 26;
   static constexpr uint8_t STEPS_LED_PIN = 27;
-  //26,27
 
   static constexpr uint8_t VOLTS = 5;
   static constexpr uint16_t MAX_MA = 800;
@@ -84,12 +81,33 @@ public:
       currentModeAsString = currentMode;
       if (currentMode.compareTo("contextDriven") == 0) {
         isOn = true;
+        Serial.println("Setting context driven");
         currentModeInt = FITBIT_GOALS;
       } else if (currentMode.compareTo("disco") == 0) {
+        Serial.println("Setting disco");
         currentModeInt = DISCO;
       } else if (currentMode.compareTo("off") == 0) {
         currentModeInt = LEDS_OFF;
+        Serial.println("Setting off");
       }
+    } else if (doc.containsKey("powerstate")) {
+      String powerstateCommand = doc["powerstate"];
+      if (powerstateCommand.compareTo("TurnOn") == 0) {
+        Serial.println("Setting context driven");
+        currentModeInt = FITBIT_GOALS;
+      } else {
+        Serial.println("Setting off");
+        currentModeInt = LEDS_OFF;
+      }
+    } else if (doc.containsKey("adjustBrightnessPercent")) {
+      int brightnessPercent = doc["adjustBrightnessPercent"];
+      int mappedBrightness = map(brightnessPercent, 0, 100, 0, 255);
+      Serial.print("Setting brightness to ");
+      Serial.print(mappedBrightness);
+      Serial.print(" from ");
+      Serial.println(brightnessPercent);
+      FastLED.setBrightness(mappedBrightness);
+      FastLED.show();
     }
     Handler::handle(doc);
   }
@@ -100,18 +118,12 @@ public:
       case FITBIT_GOALS:
         if (isOn) {
 
-
           drawCompletion(waterGoalLeds, context.waterGoalReachedPercent, CRGB::Blue);
-          drawCompletion(sleepLeds, context.waterGoalReachedPercent, CRGB::Green);
+          drawCompletion(sleepLeds, context.sleepGoalReachedPercent, CRGB::Green);
           drawCompletion(calsGoalLeds, context.caloriesGoalReachedPercent, CRGB::Red);
-          drawCompletion(stepsGoalLeds, context.waterGoalReachedPercent, CRGB(255, 165, 0));
-
-//          drawCompletion(waterGoalLeds, context.waterGoalReachedPercent, CRGB::Blue);
-  //        drawCompletion(sleepLeds, context.sleepGoalReachedPercent, CRGB::Green);
-   //       drawCompletion(calsGoalLeds, context.caloriesGoalReachedPercent, CRGB::Red);
-     //     drawCompletion(stepsGoalLeds, context.weightGoalReachedPercent, CRGB(255, 165, 0));
-
+          drawCompletion(stepsGoalLeds, context.stepsGoalReachedPercent, CRGB(255, 165, 0));
           FastLED.show();
+          delay(50);
         }
         //        Serial.println("Updated for fitbit goals");
         isOn = false;

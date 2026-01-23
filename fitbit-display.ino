@@ -11,6 +11,7 @@
 #include "CaloriesGoalHandler.cpp"
 #include "WeightGoalHandler.cpp"
 #include "LedModeHandler.cpp"
+#include "StepGoalsHandler.cpp"
 #include "Context.h"
 //#include <ESP8266httpUpdate.h>
 //#include <ESP8266HTTPClient.h>
@@ -19,7 +20,8 @@
 #include <DHT.h>
 
 
-#define DHTPIN 32      //(rød gpio0, pin D3) (3,3 volt)
+//#define DHTPIN 32      //(rød gpio0, pin D3) (3,3 volt)
+#define DHTPIN 25      //(rød gpio0, pin D3) (3,3 volt)
 #define DHTTYPE DHT11  // DHT 11
 //#define DHTTYPE DHT22  // DHT 22  (AM2302), AM2321
 float temperature = 0;
@@ -39,10 +41,10 @@ unsigned long previousMillis = 0;  // will store last time LED was updated
 WebSocketsClient webSocketClient;
 //for prod
 //char host[] = "www.offbeat-iot.com";
-char host[] = "soeren.herokuapp.com";
+char host[] = "www.offbeat-iot.com";
 
-char user[] = "px403";
-char socketPassword[] = "Rxxy4cH9";
+char user[] = "k3rbg";
+char socketPassword[] = "d09VJd47";
 char path[] = "/ws?device=CjvJ39w8";
 char deviceId[] = "CjvJ39w8";
 
@@ -57,6 +59,7 @@ CaloriesGoalHandler caloriesHandler(context);
 SleepGoalHandler sleepHandler(context);
 WeightGoalHandler weightGoalHandler(context);
 LedModeHandler ledModeHandler(context);
+StepGoalsHandler stepsGoalHandler(context);
 SimpleTimer timer;
 
 
@@ -107,17 +110,21 @@ void reportIPAddress() {
   updateStatus(deviceId, "ipaddress", ipaddressString);
 }
 
+void updateBrightness() {
+  updateStatus(deviceId, "sync", "adjustBrightnessPercent");
+}
+void updateMode() {
+  updateStatus(deviceId, "sync", "setMode");
+  timer.setTimeout(500, updateBrightness);
+}
 void getWater() {
-  //{"endpointId":"${endpointId}","fitbit.get.water":{"water":0.0}}
   updateStatus(deviceId, "fitbit.get.water", "");
 }
 void getSleep() {
-  //{"endpointId":"${endpointId}","fitbit.get.water":{"water":0.0}}
   updateStatus(deviceId, "fitbit.get.sleep", "");
 }
 
 void getSleepGoal() {
-  //{"endpointId":"${endpointId}","fitbit.get.water.goal":{"goal":24,"startDate":"2019-03-21"}}
   updateStatus(deviceId, "fitbit.get.sleep.goal", "");
 }
 
@@ -149,6 +156,27 @@ void getCurrentWeight() {
   updateStatus(deviceId, "fitbit.get.current.weight", "");
 }
 
+void updateFitbitValues() {
+  int timeoutSeconds = 0;
+  timeoutSeconds++;
+  timer.setTimeout(timeoutSeconds * 1000, getFitbitWeight);
+  timeoutSeconds++;
+  timer.setTimeout(timeoutSeconds * 1000, getFitbitWeightGoal);
+  timeoutSeconds++;
+  timer.setTimeout(timeoutSeconds * 1000, getFitbitDailyActivities);
+  timeoutSeconds++;
+  timer.setTimeout(timeoutSeconds * 1000, getCurrentWeight);
+  timeoutSeconds++;
+  timer.setTimeout(timeoutSeconds * 1000, getWater);
+  timeoutSeconds++;
+  timer.setTimeout(timeoutSeconds * 1000, getWaterGoal);
+  timeoutSeconds++;
+  timer.setTimeout(timeoutSeconds * 1000, getSleep);
+  timeoutSeconds++;
+  timer.setTimeout(timeoutSeconds * 1000, getSleepGoal);
+}
+
+
 boolean shouldReport = false;
 boolean pumpOn = false;
 void turnOnPump() {
@@ -179,8 +207,8 @@ void reconnectIfNoPing() {
   if (!gotPing) {
     TelnetStream.println(F("No ping received, reconnecting"));
     USE_SERIAL.println(F("No ping received, reconnecting"));
-    webSocketClient.disconnect();
-    ESP.restart();
+    //webSocketClient.disconnect();
+    //ESP.restart();
   } else {
     gotPing = false;
   }
@@ -212,7 +240,7 @@ void calculateTempHum() {
   float hif = dht.computeHeatIndex(f, h);
   // Compute heat index in Celsius (isFahreheit = false)
   float hic = dht.computeHeatIndex(t, h, false);
-
+  TelnetStream.printf("Humidity: %.2f.%% Temperature: %0.f *C, Heat index: %.2f *C. %.2f *F\r\n", h, t, hic, hif);
   USE_SERIAL.print("Humidity: ");
   USE_SERIAL.print(h);
   USE_SERIAL.print(" %\t");
@@ -243,17 +271,17 @@ void handleCommand(const String& payload, size_t length) {
     Serial.println(error.c_str());
     return;
   }
-  if (doc.containsKey("powerstate")) {
-    commandValue = doc["powerstate"];
-    Serial.print(F("Handling powerstate: "));
-    Serial.println(commandValue);
-    if (strcmp(commandValue, "TurnOn") == 0) {
-      turnOnPump();
-    } else if (strcmp(commandValue, "TurnOff") == 0) {
-      turnOffPump();
-    }
-    shouldReport = true;
-  } else if (doc.containsKey("bodyWeight.powerstate")) {
+  //  if (doc.containsKey("powerstate")) {
+  //    commandValue = doc["powerstate"];
+  //    Serial.print(F("Handling powerstate: "));
+  //    Serial.println(commandValue);
+  //    if (strcmp(commandValue, "TurnOn") == 0) {
+  //      turnOnPump();
+  //    } else if (strcmp(commandValue, "TurnOff") == 0) {
+  //      turnOffPump();
+  //    }
+  //} else
+  if (doc.containsKey("bodyWeight.powerstate")) {
     getFitbitWeight();
   } else if (doc.containsKey("weightGoal.powerstate")) {
     //{"endpointId":"CjvJ39w8","weightGoal.powerstate":"TurnOff"}
@@ -272,9 +300,14 @@ void handleCommand(const String& payload, size_t length) {
     waterHandler.handle(doc);
   }
 
-  context.printStatus();
+  //TelnetStream.printf("Humidity: %.2f.%% Temperature: %0.f *C, Heat index: %.2f *C. %.2f *F\n", h, t, hic, hif);
+
+  context.printStatus(Serial);
+  context.printStatus(TelnetStream);
   Serial.println(F("Done"));
   Serial.flush();
+  TelnetStream.println(F("Done"));
+  TelnetStream.flush();
 }
 
 void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
@@ -284,47 +317,42 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
   switch (type) {
     case WStype_DISCONNECTED:
       USE_SERIAL.printf("[WSc] Disconnected!\n");
+      TelnetStream.printf("[WSc] Disconnected!\r\n");
       break;
     case WStype_ERROR:
-      USE_SERIAL.printf("[WSc] Error: %s s\n", payload);
+      USE_SERIAL.printf("[WSc] Error: %s s\r\n", payload);
+      TelnetStream.printf("[WSc] Error: %s \r\n", payload);
       break;
     case WStype_CONNECTED:
       {
-        USE_SERIAL.printf("[WSc] Connected to url: % s\n", payload);
-
+        USE_SERIAL.printf("[WSc] Connected to url: % s\r\n", payload);
+        TelnetStream.printf("[WSc] Connected to url: % s\r\n", payload);
         // send message to server when Connected
         //webSocketClient.sendTXT("powerstate = Off");
         reportIPAddress();
         shouldReport = true;
         reportVersion();
         updateStatus(deviceId, "myVersion", (char*)theVersion);
-        updateStatus(deviceId, "sync", "setMode");
-
+        timer.setTimeout(500, updateMode);
         // try to update modes. Send the instance of the mode and which mode is active. Easy peasy
         //disco
         //contextDriven
         //off
-        //        reportMode();
-        //TODO: perhaps it could make sense to add an asycnt method
-        getFitbitWeight();
-        getFitbitWeightGoal();
-        getFitbitDailyActivities();
-        getCurrentWeight();
-        getWater();
-        getWaterGoal();
-        getSleep();
-        getSleepGoal();
-        
+        timer.setTimeout(15 * 1000, updateMode);
+
+        updateFitbitValues();
       }
       break;
     case WStype_TEXT:
       turnOnLed();
-      USE_SERIAL.printf("[WSc] get text: % s\n", payload);
+
+      USE_SERIAL.printf("[WSc] get text: % s\r\n", payload);
+      TelnetStream.printf("[WSc] get text: % s\r\n", payload);
       handleCommand(String((char*)payload), length);
 
       break;
     case WStype_BIN:
-      USE_SERIAL.printf("[WSc] get binary length: % u\n", length);
+      USE_SERIAL.printf("[WSc] get binary length: %u\r\n", length);
       //hexdump(payload, length);
 
       // send data to server
@@ -332,12 +360,14 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
       break;
     case WStype_PING:
       // pong will be send automatically
-      USE_SERIAL.printf("[WSc] get ping\n");
+      USE_SERIAL.printf("[WSc] get ping\r\n");
+      TelnetStream.printf("[WSc] get ping\r\n");
       gotPing = true;
       break;
     case WStype_PONG:
       // answer to a ping we send
-      USE_SERIAL.printf("[WSc] get pong\n");
+      USE_SERIAL.printf("[WSc] get pong\r\n");
+      TelnetStream.printf("[WSc] get pong\r\n");
       break;
     default:
       USE_SERIAL.printf("[WSc] default: ");
@@ -349,6 +379,8 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
 
 
 void setup() {
+  WiFi.setHostname("fitbit-display");
+
   Serial.begin(115200);
   delay(75);
   Serial.println("Booting");
@@ -366,14 +398,16 @@ void setup() {
   // Link the chain
   waterHandler.setNext(&caloriesHandler);
   caloriesHandler.setNext(&sleepHandler);
-  sleepHandler.setNext(&weightGoalHandler);
+  sleepHandler.setNext(&stepsGoalHandler);
+  stepsGoalHandler.setNext(&weightGoalHandler);
   weightGoalHandler.setNext(&ledModeHandler);
+
 
   setupOTA("FitbitDisplay", mySSID, myPASSWORD);
 
   Serial.println("Connecting to websocket");
 
-  webSocketClient.begin(host, 80, path);
+  webSocketClient.beginSSL(host, 443, path);
   webSocketClient.setExtraHeaders("Accept: application/json");
   webSocketClient.setAuthorization(user, socketPassword);
   webSocketClient.onEvent(webSocketEvent);
@@ -385,14 +419,17 @@ void setup() {
   // consider connection disconnected if pong is not received 2 times
   webSocketClient.enableHeartbeat(15000, 15000, 2);
 
-  WiFi.setHostname("fitbit-display");
   //TODO: Only do this when connection
   timer.setInterval(60 * 1000L, reconnectIfNoPing);
   timer.setInterval(10 * 1000, calculateTempHum);
+  timer.setInterval(60 * 1000, updateMode);
 
+  timer.setInterval(5 * 60 * 1000, updateFitbitValues);
   Serial.println("Setup done");
   Serial.flush();
   turnOffLed();
+
+  // WiFi.eventName(arduino_event_id_t id)
 }
 
 
@@ -402,6 +439,7 @@ void loop() {
   ArduinoOTA.handle();
   //#endif
   webSocketClient.loop();
+  timer.run();
 
   String modeRightNow = ledModeHandler.run();
   if (modeRightNow.compareTo(currentModeAsString) != 0) {
@@ -409,6 +447,7 @@ void loop() {
     reportMode();
   }
 
+  //  if (TelnetStream.)
   if (TelnetStream.available() > 0) {
     char inChar = TelnetStream.read();
     switch (inChar) {
@@ -434,6 +473,15 @@ void loop() {
         break;
       case '5':
         getFitbitDailyActivities();
+        break;
+      case '6':
+        updateMode();
+        break;
+      case '7':
+        calculateTempHum();
+        break;
+      case '8':
+        updateFitbitValues();
         break;
       case 't':
         turnOnPump();
