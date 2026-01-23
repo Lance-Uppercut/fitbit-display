@@ -1,12 +1,40 @@
-library(
-  identifier: 'shared-jenkins-pipelines@codex/add-api-push-for-binary-file',
-  retriever: modernSCM([
-    $class: 'GitSCMSource',
-    remote: 'https://github.com/forever-iot/shared-jenkins-pipelines.git',
-    credentialsId: 'github'
-  ])
-)
+pipeline {
+  agent { label 'build' }
+  options { timestamps() }
 
-platformioPipeline('offbeatCredentialsId': "offbeatCredentialsId"
-,'offbeatDeviceId':"CjvJ39w8"
-,'publishOffbeat':'true')
+  stages {
+    stage('Setup') {
+      steps {
+        sh '''
+          set -eu
+          if command -v python3 >/dev/null 2>&1; then
+            python3 -m pip install --user --upgrade pip platformio
+          elif command -v python >/dev/null 2>&1; then
+            python -m pip install --user --upgrade pip platformio
+          else
+            echo "Python not found on build agent" >&2
+            exit 1
+          fi
+        '''
+      }
+    }
+
+    stage('Build') {
+      steps {
+        sh '''
+          set -eu
+          if command -v platformio >/dev/null 2>&1; then
+            PIO=platformio
+          elif [ -x "$HOME/.local/bin/platformio" ]; then
+            PIO="$HOME/.local/bin/platformio"
+          else
+            USER_BASE=$(python3 -m site --user-base 2>/dev/null || python -m site --user-base)
+            PIO="$USER_BASE/bin/platformio"
+          fi
+
+          "$PIO" run -e nodemcuv2_serial
+        '''
+      }
+    }
+  }
+}
