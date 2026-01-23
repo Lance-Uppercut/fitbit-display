@@ -8,17 +8,9 @@ pipeline {
         sh '''
           set -eu
           if command -v python3 >/dev/null 2>&1; then
-            if [ -n "${VIRTUAL_ENV:-}" ]; then
-              python3 -m pip install --upgrade pip platformio
-            else
-              python3 -m pip install --user --upgrade pip platformio
-            fi
+            python3 -m pip install --upgrade pip platformio || python3 -m pip install --user --upgrade pip platformio
           elif command -v python >/dev/null 2>&1; then
-            if [ -n "${VIRTUAL_ENV:-}" ]; then
-              python -m pip install --upgrade pip platformio
-            else
-              python -m pip install --user --upgrade pip platformio
-            fi
+            python -m pip install --upgrade pip platformio || python -m pip install --user --upgrade pip platformio
           else
             echo "Python not found on build agent" >&2
             exit 1
