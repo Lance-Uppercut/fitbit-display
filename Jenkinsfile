@@ -1,7 +1,12 @@
-@Library("shared-jenkins-pipelines@master") _
+library(
+  identifier: 'shared-jenkins-pipelines@codex/add-api-push-for-binary-file',
+  retriever: modernSCM([
+    $class: 'GitSCMSource',
+    remote: 'https://github.com/forever-iot/shared-jenkins-pipelines.git',
+    credentialsId: 'github'
+  ])
+)
 
-withEnv(["SHELL=/bin/bash"]) {
-  platformioPipeline('offbeatCredentialsId': "offbeatCredentialsId"
-  ,'offbeatDeviceId':"CjvJ39w8"
-  ,'publishOffbeat':'true')
-}
+platformioPipeline('offbeatCredentialsId': "offbeatCredentialsId"
+,'offbeatDeviceId':"CjvJ39w8"
+,'publishOffbeat':'true')
