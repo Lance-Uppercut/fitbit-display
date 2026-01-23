@@ -1,4 +1,4 @@
-@Library("shared-jenkins-pipelines") _
+@Library("shared-jenkins-pipelines@master") _
 
 withEnv(["SHELL=/bin/bash"]) {
   platformioPipeline('offbeatCredentialsId': "offbeatCredentialsId"
