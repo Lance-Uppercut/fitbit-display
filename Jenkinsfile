@@ -36,7 +36,7 @@ pipeline {
             PIO="$USER_BASE/bin/platformio"
           fi
 
-          "$PIO" run -e nodemcuv2_serial
+          "$PIO" run -e esp32dev_serial
         '''
       }
     }
