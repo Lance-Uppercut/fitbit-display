@@ -6,6 +6,7 @@
 #include <WebSocketsClient.h>
 #include <SimpleTimer.h>
 #include <ArduinoJson.h>
+#include <cbor.h>
 #include "WaterGoalHandler.cpp"
 #include "SleepGoalHandler.cpp"
 #include "CaloriesGoalHandler.cpp"
@@ -64,6 +65,8 @@ SimpleTimer timer;
 
 
 String currentModeAsString = String("off");
+constexpr size_t OUTBOUND_CBOR_BUFFER_SIZE = 384;
+constexpr size_t INBOUND_DOC_OVERHEAD = 512;
 
 void turnOnLed() {
   digitalWrite(LED_BUILTIN, HIGH);
@@ -73,22 +76,55 @@ void turnOffLed() {
 }
 
 
-void updateStatus(char* deviceId, char* state, char* newState) {
-  if (webSocketClient.isConnected()) {
-    char powerstate[4];
-    strcpy(powerstate, newState);
-    //char s[256];
-    //sprintf(s, "%s=%s,deviceId=%s", state, newState, deviceId);
-    char s[256];
-    sprintf(s, "{\"%s\":\"% s\",\"deviceId\":\"% s\"}", state, newState, deviceId);
+bool sendStatusAsCbor(const char* state, const char* newState) {
+  if (state == nullptr) {
+    return false;
+  }
+  if (newState == nullptr) {
+    newState = "";
+  }
 
-    Serial.print("Sending text: ");
-    Serial.println(s);
-    TelnetStream.print("Sending text: ");
-    TelnetStream.println(s);
-    webSocketClient.sendTXT(s);
-  } else {
+  uint8_t payload[OUTBOUND_CBOR_BUFFER_SIZE];
+  CborEncoder encoder;
+  CborEncoder rootMap;
+  cbor_encoder_init(&encoder, payload, sizeof(payload), 0);
+
+  CborError error = cbor_encoder_create_map(&encoder, &rootMap, 2);
+  if (error == CborNoError) {
+    error = cbor_encode_text_stringz(&rootMap, "deviceId");
+  }
+  if (error == CborNoError) {
+    error = cbor_encode_text_stringz(&rootMap, deviceId);
+  }
+  if (error == CborNoError) {
+    error = cbor_encode_text_stringz(&rootMap, state);
+  }
+  if (error == CborNoError) {
+    error = cbor_encode_text_stringz(&rootMap, newState);
+  }
+  if (error == CborNoError) {
+    error = cbor_encoder_close_container(&encoder, &rootMap);
+  }
+  if (error != CborNoError) {
+    return false;
+  }
+
+  size_t payloadLength = cbor_encoder_get_buffer_size(&encoder, payload);
+  webSocketClient.sendBIN(payload, payloadLength);
+  return true;
+}
+
+void updateStatus(const char* currentDeviceId, const char* state, const char* newState) {
+  if (currentDeviceId == nullptr || !webSocketClient.isConnected()) {
     Serial.println("Not connected when updating status");
+    return;
+  }
+
+  bool sent = sendStatusAsCbor(state, newState);
+  if (sent) {
+    TelnetStream.printf("Sent CBOR command: %s=%s\r\n", state, newState == nullptr ? "" : newState);
+  } else {
+    Serial.println("Failed to encode CBOR status message");
   }
 }
 
@@ -135,8 +171,7 @@ void getWaterGoal() {
 
 void getFitbitWeight() {
   Serial.println("Getting fitbit weight");
-  //taking the easy road of just sending strings
-  webSocketClient.sendTXT("{\"fitbit.get.weight\":\"\"}");
+  updateStatus(deviceId, "fitbit.get.weight", "");
 }
 
 void getFitbitWeightGoal() {
@@ -257,40 +292,198 @@ void calculateTempHum() {
 }
 
 
-void handleCommand(const String& payload, size_t length) {
-  const char* deviceIdFromMessage;
-  const char* command;
-  const char* commandValue;
-  //  const size_t capacity = JSON_OBJECT_SIZE(2) + 20;  //Memory pool
-  //{"bodyWeight.powerstate":"TurnOn","endpointId":"CjvJ39w8"}
-  // {"endpointId":"CjvJ39w8","powerstate":"TurnOn"}
-  DynamicJsonDocument doc(length + 4);
-  DeserializationError error = deserializeJson(doc, payload);
-  if (error) {
-    Serial.print(F("deserializeJson() returned "));
-    Serial.println(error.c_str());
-    return;
+bool readCborTextString(CborValue* value, String& out) {
+  size_t textLength = 0;
+  CborError error = cbor_value_calculate_string_length(value, &textLength);
+  if (error != CborNoError) {
+    return false;
   }
-  //  if (doc.containsKey("powerstate")) {
-  //    commandValue = doc["powerstate"];
-  //    Serial.print(F("Handling powerstate: "));
-  //    Serial.println(commandValue);
-  //    if (strcmp(commandValue, "TurnOn") == 0) {
-  //      turnOnPump();
-  //    } else if (strcmp(commandValue, "TurnOff") == 0) {
-  //      turnOffPump();
-  //    }
-  //} else
+
+  char* buffer = static_cast<char*>(malloc(textLength + 1));
+  if (buffer == nullptr) {
+    return false;
+  }
+
+  error = cbor_value_copy_text_string(value, buffer, &textLength, value);
+  if (error != CborNoError) {
+    free(buffer);
+    return false;
+  }
+  buffer[textLength] = '\0';
+  out = String(buffer);
+  free(buffer);
+  return true;
+}
+
+bool readCborByteStringAsHex(CborValue* value, String& out) {
+  size_t length = 0;
+  CborError error = cbor_value_calculate_string_length(value, &length);
+  if (error != CborNoError) {
+    return false;
+  }
+
+  uint8_t* buffer = static_cast<uint8_t*>(malloc(length));
+  if (buffer == nullptr) {
+    return false;
+  }
+
+  error = cbor_value_copy_byte_string(value, buffer, &length, value);
+  if (error != CborNoError) {
+    free(buffer);
+    return false;
+  }
+
+  out = "";
+  out.reserve(length * 2);
+  for (size_t i = 0; i < length; i++) {
+    char hex[3];
+    sprintf(hex, "%02X", buffer[i]);
+    out += hex;
+  }
+  free(buffer);
+  return true;
+}
+
+bool cborValueToJson(CborValue* value, JsonVariant target) {
+  CborType type = cbor_value_get_type(value);
+
+  if (type == CborMapType) {
+    JsonObject object = target.to<JsonObject>();
+    CborValue iterator;
+    CborError error = cbor_value_enter_container(value, &iterator);
+    if (error != CborNoError) {
+      return false;
+    }
+
+    while (!cbor_value_at_end(&iterator)) {
+      if (!cbor_value_is_text_string(&iterator)) {
+        return false;
+      }
+      String key;
+      if (!readCborTextString(&iterator, key)) {
+        return false;
+      }
+      JsonVariant child = object[key.c_str()];
+      if (!cborValueToJson(&iterator, child)) {
+        return false;
+      }
+    }
+    return cbor_value_leave_container(value, &iterator) == CborNoError;
+  }
+
+  if (type == CborArrayType) {
+    JsonArray array = target.to<JsonArray>();
+    CborValue iterator;
+    CborError error = cbor_value_enter_container(value, &iterator);
+    if (error != CborNoError) {
+      return false;
+    }
+
+    while (!cbor_value_at_end(&iterator)) {
+      JsonVariant child = array.add();
+      if (!cborValueToJson(&iterator, child)) {
+        return false;
+      }
+    }
+    return cbor_value_leave_container(value, &iterator) == CborNoError;
+  }
+
+  if (type == CborTextStringType) {
+    String text;
+    if (!readCborTextString(value, text)) {
+      return false;
+    }
+    target.set(text);
+    return true;
+  }
+
+  if (type == CborByteStringType) {
+    String byteStringAsHex;
+    if (!readCborByteStringAsHex(value, byteStringAsHex)) {
+      return false;
+    }
+    target.set(byteStringAsHex);
+    return true;
+  }
+
+  if (type == CborIntegerType) {
+    CborError error = CborNoError;
+    if (cbor_value_is_unsigned_integer(value)) {
+      uint64_t unsignedValue = 0;
+      error = cbor_value_get_uint64(value, &unsignedValue);
+      if (error == CborNoError) {
+        target.set(unsignedValue);
+      }
+    } else {
+      int64_t signedValue = 0;
+      error = cbor_value_get_int64(value, &signedValue);
+      if (error == CborNoError) {
+        target.set(signedValue);
+      }
+    }
+    if (error != CborNoError) {
+      return false;
+    }
+    return cbor_value_advance(value) == CborNoError;
+  }
+
+  if (type == CborBooleanType) {
+    bool boolValue = false;
+    CborError error = cbor_value_get_boolean(value, &boolValue);
+    if (error != CborNoError) {
+      return false;
+    }
+    target.set(boolValue);
+    return cbor_value_advance(value) == CborNoError;
+  }
+
+  if (type == CborFloatType) {
+    float floatValue = 0.0f;
+    CborError error = cbor_value_get_float(value, &floatValue);
+    if (error != CborNoError) {
+      return false;
+    }
+    target.set(floatValue);
+    return cbor_value_advance(value) == CborNoError;
+  }
+
+  if (type == CborDoubleType) {
+    double doubleValue = 0.0;
+    CborError error = cbor_value_get_double(value, &doubleValue);
+    if (error != CborNoError) {
+      return false;
+    }
+    target.set(doubleValue);
+    return cbor_value_advance(value) == CborNoError;
+  }
+
+  if (type == CborNullType || type == CborUndefinedType) {
+    target.set(nullptr);
+    return cbor_value_advance(value) == CborNoError;
+  }
+
+  return cbor_value_advance(value) == CborNoError;
+}
+
+bool deserializeCborToJsonDocument(const uint8_t* payload, size_t length, DynamicJsonDocument& doc) {
+  CborParser parser;
+  CborValue root;
+  CborError error = cbor_parser_init(payload, length, 0, &parser, &root);
+  if (error != CborNoError) {
+    return false;
+  }
+  JsonVariant rootVariant = doc.to<JsonVariant>();
+  return cborValueToJson(&root, rootVariant);
+}
+
+void handleCommandDocument(DynamicJsonDocument& doc) {
   if (doc.containsKey("bodyWeight.powerstate")) {
     getFitbitWeight();
   } else if (doc.containsKey("weightGoal.powerstate")) {
-    //{"endpointId":"CjvJ39w8","weightGoal.powerstate":"TurnOff"}
     getFitbitWeightGoal();
   } else if (doc.containsKey("dailyActivities.powerstate")) {
-    //{"endpointId":"CjvJ39w8","weightGoal.powerstate":"TurnOff"}
     getFitbitDailyActivities();
   } else if (doc.containsKey("getBody.powerstate")) {
-    //{"endpointId":"CjvJ39w8","weightGoal.powerstate":"TurnOff"}
     updateStatus(deviceId, "fitbit.get.body", "");
   } else if (doc.containsKey("currentWeight.powerstate")) {
     getCurrentWeight();
@@ -300,8 +493,6 @@ void handleCommand(const String& payload, size_t length) {
     waterHandler.handle(doc);
   }
 
-  //TelnetStream.printf("Humidity: %.2f.%% Temperature: %0.f *C, Heat index: %.2f *C. %.2f *F\n", h, t, hic, hif);
-
   context.printStatus(Serial);
   context.printStatus(TelnetStream);
   Serial.println(F("Done"));
@@ -310,10 +501,27 @@ void handleCommand(const String& payload, size_t length) {
   TelnetStream.flush();
 }
 
+void handleTextCommand(const String& payload, size_t length) {
+  DynamicJsonDocument doc(length + INBOUND_DOC_OVERHEAD);
+  DeserializationError error = deserializeJson(doc, payload);
+  if (error) {
+    Serial.print(F("deserializeJson() returned "));
+    Serial.println(error.c_str());
+    return;
+  }
+  handleCommandDocument(doc);
+}
+
+void handleBinaryCommand(const uint8_t* payload, size_t length) {
+  DynamicJsonDocument doc((length * 8) + INBOUND_DOC_OVERHEAD);
+  if (!deserializeCborToJsonDocument(payload, length, doc)) {
+    Serial.println(F("Failed to deserialize CBOR payload"));
+    return;
+  }
+  handleCommandDocument(doc);
+}
+
 void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
-  char* deviceIdFromMessage;
-  char* command;
-  char* commandValue;
   switch (type) {
     case WStype_DISCONNECTED:
       USE_SERIAL.printf("[WSc] Disconnected!\n");
@@ -325,8 +533,8 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
       break;
     case WStype_CONNECTED:
       {
-        USE_SERIAL.printf("[WSc] Connected to url: % s\r\n", payload);
-        TelnetStream.printf("[WSc] Connected to url: % s\r\n", payload);
+        USE_SERIAL.printf("[WSc] Connected to url: %s\r\n", payload);
+        TelnetStream.printf("[WSc] Connected to url: %s\r\n", payload);
         // send message to server when Connected
         //webSocketClient.sendTXT("powerstate = Off");
         reportIPAddress();
@@ -346,17 +554,14 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
     case WStype_TEXT:
       turnOnLed();
 
-      USE_SERIAL.printf("[WSc] get text: % s\r\n", payload);
-      TelnetStream.printf("[WSc] get text: % s\r\n", payload);
-      handleCommand(String((char*)payload), length);
+      USE_SERIAL.printf("[WSc] get text: %s\r\n", payload);
+      TelnetStream.printf("[WSc] get text: %s\r\n", payload);
+      handleTextCommand(String((char*)payload), length);
 
       break;
     case WStype_BIN:
       USE_SERIAL.printf("[WSc] get binary length: %u\r\n", length);
-      //hexdump(payload, length);
-
-      // send data to server
-      // webSocketClient.sendBIN(payload, length);
+      handleBinaryCommand(payload, length);
       break;
     case WStype_PING:
       // pong will be send automatically
@@ -408,7 +613,7 @@ void setup() {
   Serial.println("Connecting to websocket");
 
   webSocketClient.beginSSL(host, 443, path);
-  webSocketClient.setExtraHeaders("Accept: application/json");
+  webSocketClient.setExtraHeaders("Sec-WebSocket-Protocol: cbor\r\nAccept: application/cbor");
   webSocketClient.setAuthorization(user, socketPassword);
   webSocketClient.onEvent(webSocketEvent);
   // try ever 5000 again if connection has failed
