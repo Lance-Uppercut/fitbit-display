@@ -42,12 +42,13 @@ unsigned long previousMillis = 0;  // will store last time LED was updated
 WebSocketsClient webSocketClient;
 //for prod
 //char host[] = "www.offbeat-iot.com";
-char host[] = "www.offbeat-iot.com";
+char host[] = "offbeat-iot.com";
 
 char user[] = "k3rbg";
 char socketPassword[] = "d09VJd47";
 char path[] = "/ws?device=CjvJ39w8";
 char deviceId[] = "CjvJ39w8";
+const char websocketHeaders[] = "Accept: application/cbor\r\nAuthorization: Basic azNyYmc6ZDA5VkpkNDc=";
 
 #define USE_SERIAL Serial
 
@@ -67,6 +68,17 @@ SimpleTimer timer;
 String currentModeAsString = String("off");
 constexpr size_t OUTBOUND_CBOR_BUFFER_SIZE = 384;
 constexpr size_t INBOUND_DOC_OVERHEAD = 512;
+struct CborCursor;
+constexpr unsigned long WIFI_RECONNECT_INTERVAL_MS = 15000;
+unsigned long lastWifiReconnectAttemptAt = 0;
+bool webSocketStarted = false;
+
+void ensureWifiConnected();
+void startWebSocketIfNeeded();
+void logDnsResolution(const char* targetHost);
+#if defined(ESP32)
+void onWifiEvent(WiFiEvent_t event, WiFiEventInfo_t info);
+#endif
 
 void turnOnLed() {
   digitalWrite(LED_BUILTIN, HIGH);
@@ -249,6 +261,62 @@ void reconnectIfNoPing() {
   }
 }
 
+void logDnsResolution(const char* targetHost) {
+  if (targetHost == nullptr || WiFi.status() != WL_CONNECTED) {
+    return;
+  }
+
+  IPAddress resolved;
+  if (WiFi.hostByName(targetHost, resolved)) {
+    USE_SERIAL.printf("DNS %s -> %s\r\n", targetHost, resolved.toString().c_str());
+  } else {
+    USE_SERIAL.printf("DNS lookup failed for %s (status=%d)\r\n", targetHost, static_cast<int>(WiFi.status()));
+  }
+}
+
+#if defined(ESP32)
+void onWifiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
+  switch (event) {
+    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+      USE_SERIAL.printf("[WiFi] disconnected (reason=%d)\r\n", static_cast<int>(info.wifi_sta_disconnected.reason));
+      break;
+    case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+      USE_SERIAL.printf("[WiFi] connected with IP %s\r\n", WiFi.localIP().toString().c_str());
+      logDnsResolution(host);
+      break;
+    default:
+      break;
+  }
+}
+#endif
+
+void ensureWifiConnected() {
+  if (WiFi.status() == WL_CONNECTED) {
+    return;
+  }
+
+  unsigned long now = millis();
+  if ((now - lastWifiReconnectAttemptAt) < WIFI_RECONNECT_INTERVAL_MS) {
+    return;
+  }
+
+  lastWifiReconnectAttemptAt = now;
+  USE_SERIAL.printf("[WiFi] offline (status=%d), retrying connect\r\n", static_cast<int>(WiFi.status()));
+  WiFi.disconnect(false, false);
+  WiFi.begin(mySSID, myPASSWORD);
+}
+
+void startWebSocketIfNeeded() {
+  if (webSocketStarted || WiFi.status() != WL_CONNECTED) {
+    return;
+  }
+
+  Serial.println("Connecting to websocket");
+  logDnsResolution(host);
+  webSocketClient.beginSSL(host, 443, path, "", "cbor");
+  webSocketStarted = true;
+}
+
 
 void calculateTempHum() {
 
@@ -344,8 +412,401 @@ bool readCborByteStringAsHex(CborValue* value, String& out) {
   return true;
 }
 
+String bytesToHex(const uint8_t* payload, size_t length) {
+  String out = "";
+  out.reserve(length * 2);
+  for (size_t i = 0; i < length; i++) {
+    char hex[3];
+    sprintf(hex, "%02X", payload[i]);
+    out += hex;
+  }
+  return out;
+}
+
+bool readCborFloatingPointValue(CborValue* value, double& out) {
+  CborType type = cbor_value_get_type(value);
+
+  if (type == CborFloatType) {
+    uint32_t raw = (value->flags & CborIteratorFlag_IntegerValueTooLarge)
+      ? static_cast<uint32_t>(_cbor_value_decode_int64_internal(value))
+      : static_cast<uint32_t>(value->extra);
+    float floatValue = 0.0f;
+    memcpy(&floatValue, &raw, sizeof(floatValue));
+    out = static_cast<double>(floatValue);
+    return true;
+  }
+
+  if (type == CborDoubleType) {
+    uint64_t raw = (value->flags & CborIteratorFlag_IntegerValueTooLarge)
+      ? _cbor_value_decode_int64_internal(value)
+      : static_cast<uint64_t>(value->extra);
+    double doubleValue = 0.0;
+    memcpy(&doubleValue, &raw, sizeof(doubleValue));
+    out = doubleValue;
+    return true;
+  }
+
+  return false;
+}
+
+struct CborCursor {
+  const uint8_t* data;
+  size_t length;
+  size_t position;
+};
+
+bool cborReadByte(CborCursor& cursor, uint8_t& out) {
+  if (cursor.position >= cursor.length) {
+    return false;
+  }
+  out = cursor.data[cursor.position++];
+  return true;
+}
+
+bool cborPeekByte(const CborCursor& cursor, uint8_t& out) {
+  if (cursor.position >= cursor.length) {
+    return false;
+  }
+  out = cursor.data[cursor.position];
+  return true;
+}
+
+bool cborReadUint(CborCursor& cursor, uint8_t additionalInfo, uint64_t& out) {
+  if (additionalInfo < 24) {
+    out = additionalInfo;
+    return true;
+  }
+
+  if (additionalInfo == 24) {
+    uint8_t value8 = 0;
+    if (!cborReadByte(cursor, value8)) {
+      return false;
+    }
+    out = value8;
+    return true;
+  }
+
+  if (additionalInfo == 25) {
+    uint8_t b0 = 0;
+    uint8_t b1 = 0;
+    if (!cborReadByte(cursor, b0) || !cborReadByte(cursor, b1)) {
+      return false;
+    }
+    out = (static_cast<uint64_t>(b0) << 8) | static_cast<uint64_t>(b1);
+    return true;
+  }
+
+  if (additionalInfo == 26) {
+    uint8_t b0 = 0;
+    uint8_t b1 = 0;
+    uint8_t b2 = 0;
+    uint8_t b3 = 0;
+    if (!cborReadByte(cursor, b0) || !cborReadByte(cursor, b1) || !cborReadByte(cursor, b2) || !cborReadByte(cursor, b3)) {
+      return false;
+    }
+    out = (static_cast<uint64_t>(b0) << 24) |
+      (static_cast<uint64_t>(b1) << 16) |
+      (static_cast<uint64_t>(b2) << 8) |
+      static_cast<uint64_t>(b3);
+    return true;
+  }
+
+  if (additionalInfo == 27) {
+    uint8_t bytes[8];
+    for (size_t i = 0; i < 8; i++) {
+      if (!cborReadByte(cursor, bytes[i])) {
+        return false;
+      }
+    }
+    out = (static_cast<uint64_t>(bytes[0]) << 56) |
+      (static_cast<uint64_t>(bytes[1]) << 48) |
+      (static_cast<uint64_t>(bytes[2]) << 40) |
+      (static_cast<uint64_t>(bytes[3]) << 32) |
+      (static_cast<uint64_t>(bytes[4]) << 24) |
+      (static_cast<uint64_t>(bytes[5]) << 16) |
+      (static_cast<uint64_t>(bytes[6]) << 8) |
+      static_cast<uint64_t>(bytes[7]);
+    return true;
+  }
+
+  return false;
+}
+
+bool decodeCborItem(CborCursor& cursor, JsonVariant target);
+
+bool decodeCborTextString(CborCursor& cursor, String& out) {
+  uint8_t initialByte = 0;
+  if (!cborReadByte(cursor, initialByte)) {
+    return false;
+  }
+
+  uint8_t majorType = initialByte >> 5;
+  uint8_t additionalInfo = initialByte & 0x1f;
+
+  if (majorType == 6) {
+    uint64_t ignoredTag = 0;
+    if (!cborReadUint(cursor, additionalInfo, ignoredTag)) {
+      return false;
+    }
+    return decodeCborTextString(cursor, out);
+  }
+
+  if (majorType != 3) {
+    return false;
+  }
+
+  if (additionalInfo == 31) {
+    out = "";
+    while (true) {
+      uint8_t nextByte = 0;
+      if (!cborPeekByte(cursor, nextByte)) {
+        return false;
+      }
+      if (nextByte == 0xff) {
+        cursor.position++;
+        return true;
+      }
+
+      String chunk;
+      if (!decodeCborTextString(cursor, chunk)) {
+        return false;
+      }
+      out += chunk;
+    }
+  }
+
+  uint64_t length = 0;
+  if (!cborReadUint(cursor, additionalInfo, length)) {
+    return false;
+  }
+
+  if (length > (cursor.length - cursor.position)) {
+    return false;
+  }
+
+  out.reserve(static_cast<size_t>(length));
+  out = "";
+  for (uint64_t i = 0; i < length; i++) {
+    out += static_cast<char>(cursor.data[cursor.position++]);
+  }
+  return true;
+}
+
+bool decodeCborMap(CborCursor& cursor, uint8_t additionalInfo, JsonVariant target) {
+  JsonObject object = target.to<JsonObject>();
+  USE_SERIAL.printf("[CBOR] map decode start ai=%u\r\n", additionalInfo);
+
+  if (additionalInfo == 31) {
+    while (true) {
+      uint8_t nextByte = 0;
+      if (!cborPeekByte(cursor, nextByte)) {
+        return false;
+      }
+      if (nextByte == 0xff) {
+        cursor.position++;
+        break;
+      }
+
+      String key;
+      if (!decodeCborTextString(cursor, key)) {
+        return false;
+      }
+      USE_SERIAL.printf("[CBOR] key=%s\r\n", key.c_str());
+      object[key] = nullptr;
+      JsonVariant child = object[key];
+      if (!decodeCborItem(cursor, child)) {
+        return false;
+      }
+    }
+    USE_SERIAL.printf("[CBOR] map size=%u\r\n", static_cast<unsigned int>(object.size()));
+    return true;
+  }
+
+  uint64_t pairCount = 0;
+  if (!cborReadUint(cursor, additionalInfo, pairCount)) {
+    return false;
+  }
+
+  for (uint64_t i = 0; i < pairCount; i++) {
+    String key;
+    if (!decodeCborTextString(cursor, key)) {
+      return false;
+    }
+    USE_SERIAL.printf("[CBOR] key=%s\r\n", key.c_str());
+    object[key] = nullptr;
+    JsonVariant child = object[key];
+    if (!decodeCborItem(cursor, child)) {
+      return false;
+    }
+  }
+
+  USE_SERIAL.printf("[CBOR] map size=%u\r\n", static_cast<unsigned int>(object.size()));
+  return true;
+}
+
+bool decodeCborArray(CborCursor& cursor, uint8_t additionalInfo, JsonVariant target) {
+  JsonArray array = target.to<JsonArray>();
+
+  if (additionalInfo == 31) {
+    while (true) {
+      uint8_t nextByte = 0;
+      if (!cborPeekByte(cursor, nextByte)) {
+        return false;
+      }
+      if (nextByte == 0xff) {
+        cursor.position++;
+        break;
+      }
+
+      JsonVariant child = array.add();
+      if (!decodeCborItem(cursor, child)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  uint64_t itemCount = 0;
+  if (!cborReadUint(cursor, additionalInfo, itemCount)) {
+    return false;
+  }
+
+  for (uint64_t i = 0; i < itemCount; i++) {
+    JsonVariant child = array.add();
+    if (!decodeCborItem(cursor, child)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+bool decodeCborItem(CborCursor& cursor, JsonVariant target) {
+  uint8_t initialByte = 0;
+  if (!cborReadByte(cursor, initialByte)) {
+    return false;
+  }
+
+  uint8_t majorType = initialByte >> 5;
+  uint8_t additionalInfo = initialByte & 0x1f;
+
+  if (majorType == 0) {
+    uint64_t value = 0;
+    if (!cborReadUint(cursor, additionalInfo, value)) {
+      return false;
+    }
+    target.set(value);
+    return true;
+  }
+
+  if (majorType == 1) {
+    uint64_t encoded = 0;
+    if (!cborReadUint(cursor, additionalInfo, encoded)) {
+      return false;
+    }
+    int64_t value = -1 - static_cast<int64_t>(encoded);
+    target.set(value);
+    return true;
+  }
+
+  if (majorType == 2) {
+    if (additionalInfo == 31) {
+      return false;
+    }
+    uint64_t length = 0;
+    if (!cborReadUint(cursor, additionalInfo, length)) {
+      return false;
+    }
+    if (length > (cursor.length - cursor.position)) {
+      return false;
+    }
+    String hex = "";
+    hex.reserve(static_cast<size_t>(length) * 2);
+    for (uint64_t i = 0; i < length; i++) {
+      char nibble[3];
+      sprintf(nibble, "%02X", cursor.data[cursor.position++]);
+      hex += nibble;
+    }
+    target.set(hex);
+    return true;
+  }
+
+  if (majorType == 3) {
+    cursor.position--;
+    String text;
+    if (!decodeCborTextString(cursor, text)) {
+      return false;
+    }
+    target.set(text);
+    return true;
+  }
+
+  if (majorType == 4) {
+    return decodeCborArray(cursor, additionalInfo, target);
+  }
+
+  if (majorType == 5) {
+    return decodeCborMap(cursor, additionalInfo, target);
+  }
+
+  if (majorType == 6) {
+    uint64_t ignoredTag = 0;
+    if (!cborReadUint(cursor, additionalInfo, ignoredTag)) {
+      return false;
+    }
+    return decodeCborItem(cursor, target);
+  }
+
+  if (majorType == 7) {
+    if (additionalInfo == 20) {
+      target.set(false);
+      return true;
+    }
+    if (additionalInfo == 21) {
+      target.set(true);
+      return true;
+    }
+    if (additionalInfo == 22 || additionalInfo == 23) {
+      target.set(nullptr);
+      return true;
+    }
+    if (additionalInfo == 26) {
+      uint64_t raw = 0;
+      if (!cborReadUint(cursor, additionalInfo, raw)) {
+        return false;
+      }
+      uint32_t raw32 = static_cast<uint32_t>(raw);
+      float value = 0.0f;
+      memcpy(&value, &raw32, sizeof(value));
+      target.set(value);
+      return true;
+    }
+    if (additionalInfo == 27) {
+      uint64_t raw = 0;
+      if (!cborReadUint(cursor, additionalInfo, raw)) {
+        return false;
+      }
+      double value = 0.0;
+      memcpy(&value, &raw, sizeof(value));
+      target.set(value);
+      return true;
+    }
+    return false;
+  }
+
+  return false;
+}
+
 bool cborValueToJson(CborValue* value, JsonVariant target) {
   CborType type = cbor_value_get_type(value);
+
+  if (type == CborTagType) {
+    CborError error = cbor_value_skip_tag(value);
+    if (error != CborNoError) {
+      return false;
+    }
+    return cborValueToJson(value, target);
+  }
 
   if (type == CborMapType) {
     JsonObject object = target.to<JsonObject>();
@@ -363,7 +824,8 @@ bool cborValueToJson(CborValue* value, JsonVariant target) {
       if (!readCborTextString(&iterator, key)) {
         return false;
       }
-      JsonVariant child = object[key.c_str()];
+      object[key] = nullptr;
+      JsonVariant child = object[key];
       if (!cborValueToJson(&iterator, child)) {
         return false;
       }
@@ -437,23 +899,12 @@ bool cborValueToJson(CborValue* value, JsonVariant target) {
     return cbor_value_advance(value) == CborNoError;
   }
 
-  if (type == CborFloatType) {
-    float floatValue = 0.0f;
-    CborError error = cbor_value_get_float(value, &floatValue);
-    if (error != CborNoError) {
+  if (type == CborFloatType || type == CborDoubleType) {
+    double numberValue = 0.0;
+    if (!readCborFloatingPointValue(value, numberValue)) {
       return false;
     }
-    target.set(floatValue);
-    return cbor_value_advance(value) == CborNoError;
-  }
-
-  if (type == CborDoubleType) {
-    double doubleValue = 0.0;
-    CborError error = cbor_value_get_double(value, &doubleValue);
-    if (error != CborNoError) {
-      return false;
-    }
-    target.set(doubleValue);
+    target.set(numberValue);
     return cbor_value_advance(value) == CborNoError;
   }
 
@@ -466,14 +917,9 @@ bool cborValueToJson(CborValue* value, JsonVariant target) {
 }
 
 bool deserializeCborToJsonDocument(const uint8_t* payload, size_t length, DynamicJsonDocument& doc) {
-  CborParser parser;
-  CborValue root;
-  CborError error = cbor_parser_init(payload, length, 0, &parser, &root);
-  if (error != CborNoError) {
-    return false;
-  }
   JsonVariant rootVariant = doc.to<JsonVariant>();
-  return cborValueToJson(&root, rootVariant);
+  CborCursor cursor{payload, length, 0};
+  return decodeCborItem(cursor, rootVariant);
 }
 
 void handleCommandDocument(DynamicJsonDocument& doc) {
@@ -518,6 +964,10 @@ void handleBinaryCommand(const uint8_t* payload, size_t length) {
     Serial.println(F("Failed to deserialize CBOR payload"));
     return;
   }
+  String jsonDebug;
+  serializeJson(doc, jsonDebug);
+  USE_SERIAL.printf("[WSc] doc usage=%u/%u overflow=%d\r\n", static_cast<unsigned int>(doc.memoryUsage()), static_cast<unsigned int>(doc.capacity()), doc.overflowed() ? 1 : 0);
+  USE_SERIAL.printf("[WSc] cbor as json: %s\r\n", jsonDebug.c_str());
   handleCommandDocument(doc);
 }
 
@@ -561,6 +1011,10 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
       break;
     case WStype_BIN:
       USE_SERIAL.printf("[WSc] get binary length: %u\r\n", length);
+      {
+        String payloadHex = bytesToHex(payload, length);
+        USE_SERIAL.printf("[WSc] binary hex: %s\r\n", payloadHex.c_str());
+      }
       handleBinaryCommand(payload, length);
       break;
     case WStype_PING:
@@ -607,14 +1061,13 @@ void setup() {
   stepsGoalHandler.setNext(&weightGoalHandler);
   weightGoalHandler.setNext(&ledModeHandler);
 
+#if defined(ESP32)
+  WiFi.onEvent(onWifiEvent);
+#endif
 
   setupOTA("FitbitDisplay", mySSID, myPASSWORD);
 
-  Serial.println("Connecting to websocket");
-
-  webSocketClient.beginSSL(host, 443, path);
-  webSocketClient.setExtraHeaders("Sec-WebSocket-Protocol: cbor\r\nAccept: application/cbor");
-  webSocketClient.setAuthorization(user, socketPassword);
+  webSocketClient.setExtraHeaders(websocketHeaders);
   webSocketClient.onEvent(webSocketEvent);
   // try ever 5000 again if connection has failed
   webSocketClient.setReconnectInterval(8000);
@@ -623,6 +1076,7 @@ void setup() {
   // expect pong from server within 3000 ms
   // consider connection disconnected if pong is not received 2 times
   webSocketClient.enableHeartbeat(15000, 15000, 2);
+  startWebSocketIfNeeded();
 
   //TODO: Only do this when connection
   timer.setInterval(60 * 1000L, reconnectIfNoPing);
@@ -641,6 +1095,8 @@ void setup() {
 void loop() {
   //#ifdef defined(ESP32_RTOS) && defined(ESP32)
   //#else // If you do not use FreeRTOS, you have to regulary call the handle method.
+  ensureWifiConnected();
+  startWebSocketIfNeeded();
   ArduinoOTA.handle();
   //#endif
   webSocketClient.loop();
