@@ -9,7 +9,12 @@ public:
   void handle(DynamicJsonDocument& doc) override {
     if (doc.containsKey("steps")) {
       int steps = doc["steps"];
-      context.stepsGoalReachedPercent = steps / 8000;
+      context.stepsGoalReachedPercent = steps / 8000.0f;
+      if (context.stepsGoalReachedPercent < 0.0f) {
+        context.stepsGoalReachedPercent = 0.0f;
+      } else if (context.stepsGoalReachedPercent > 1.0f) {
+        context.stepsGoalReachedPercent = 1.0f;
+      }
       Serial.print("Steps goal: ");
       Serial.println(context.stepsGoalReachedPercent);
     }

@@ -3,8 +3,8 @@
 
 class WaterGoalHandler : public Handler {
 private:
-  float water;
-  float goal;
+  float water = 0.0f;
+  float goal = 0.0f;
 public:
   explicit WaterGoalHandler(Context& ctx)
     : Handler(ctx) {}
@@ -15,17 +15,26 @@ public:
 
     if (doc.containsKey("fitbit.get.water")) {
       water = doc["fitbit.get.water"]["water"];
-    } else if (doc.containsKey("fitbit.get.water.goal")) {
-      goal = doc["fitbit.get.water.goal"]["goal"];
-      context.waterGoalReachedPercent = (water / goal);
-      Serial.print("Water goal: ");
-      Serial.print(goal);
-      Serial.print(" Water: ");
-      Serial.print(water);
-      Serial.print("%: ");
-      Serial.println(context.waterGoalReachedPercent);
-      
     }
+    if (doc.containsKey("fitbit.get.water.goal")) {
+      goal = doc["fitbit.get.water.goal"]["goal"];
+    }
+
+    if (goal > 0.0f) {
+      context.waterGoalReachedPercent = water / goal;
+      if (context.waterGoalReachedPercent < 0.0f) {
+        context.waterGoalReachedPercent = 0.0f;
+      } else if (context.waterGoalReachedPercent > 1.0f) {
+        context.waterGoalReachedPercent = 1.0f;
+      }
+    }
+
+    Serial.print("Water goal: ");
+    Serial.print(goal);
+    Serial.print(" Water: ");
+    Serial.print(water);
+    Serial.print(" ratio: ");
+    Serial.println(context.waterGoalReachedPercent);
 
     Handler::handle(doc);
   }
