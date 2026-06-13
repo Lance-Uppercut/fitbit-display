@@ -203,24 +203,29 @@ void getCurrentWeight() {
   updateStatus(deviceId, "fitbit.get.current.weight", "");
 }
 
+void sendNextFitbitRequest() {
+  static int step = 0;
+  switch (step) {
+    case 0: getFitbitWeight(); break;
+    case 1: getFitbitWeightGoal(); break;
+    case 2: getFitbitDailyActivities(); break;
+    case 3: getCurrentWeight(); break;
+    case 4: getWater(); break;
+    case 5: getWaterGoal(); break;
+    case 6: getSleep(); break;
+    case 7: getSleepGoal(); break;
+    default: step = 0; return;
+  }
+  step++;
+  if (step < 8) {
+    timer.setTimeout(1000, sendNextFitbitRequest);
+  } else {
+    step = 0;
+  }
+}
+
 void updateFitbitValues() {
-  int timeoutSeconds = 0;
-  timeoutSeconds++;
-  timer.setTimeout(timeoutSeconds * 1000, getFitbitWeight);
-  timeoutSeconds++;
-  timer.setTimeout(timeoutSeconds * 1000, getFitbitWeightGoal);
-  timeoutSeconds++;
-  timer.setTimeout(timeoutSeconds * 1000, getFitbitDailyActivities);
-  timeoutSeconds++;
-  timer.setTimeout(timeoutSeconds * 1000, getCurrentWeight);
-  timeoutSeconds++;
-  timer.setTimeout(timeoutSeconds * 1000, getWater);
-  timeoutSeconds++;
-  timer.setTimeout(timeoutSeconds * 1000, getWaterGoal);
-  timeoutSeconds++;
-  timer.setTimeout(timeoutSeconds * 1000, getSleep);
-  timeoutSeconds++;
-  timer.setTimeout(timeoutSeconds * 1000, getSleepGoal);
+  sendNextFitbitRequest();
 }
 
 
@@ -962,12 +967,14 @@ void handleBinaryCommand(const uint8_t* payload, size_t length) {
   DynamicJsonDocument doc((length * 8) + INBOUND_DOC_OVERHEAD);
   if (!deserializeCborToJsonDocument(payload, length, doc)) {
     Serial.println(F("Failed to deserialize CBOR payload"));
+    TelnetStream.println(F("Failed to deserialize CBOR payload"));
     return;
   }
   String jsonDebug;
   serializeJson(doc, jsonDebug);
   USE_SERIAL.printf("[WSc] doc usage=%u/%u overflow=%d\r\n", static_cast<unsigned int>(doc.memoryUsage()), static_cast<unsigned int>(doc.capacity()), doc.overflowed() ? 1 : 0);
   USE_SERIAL.printf("[WSc] cbor as json: %s\r\n", jsonDebug.c_str());
+  TelnetStream.printf("[WSc] cbor as json: %s\r\n", jsonDebug.c_str());
   handleCommandDocument(doc);
 }
 
@@ -1111,6 +1118,7 @@ void loop() {
   //  if (TelnetStream.)
   if (TelnetStream.available() > 0) {
     char inChar = TelnetStream.read();
+  
     switch (inChar) {
       case 'r':
         TelnetStream.println("Restarting.......");

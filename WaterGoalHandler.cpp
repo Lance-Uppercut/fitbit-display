@@ -1,5 +1,6 @@
 #include <ArduinoJson.h>
-#include "Handler.h"  // Include the correct header for Handler class
+#include "Handler.h"
+#include <TelnetStream.h>
 
 class WaterGoalHandler : public Handler {
 private:
@@ -14,10 +15,20 @@ public:
     //{"endpointId":"${endpointId}","fitbit.get.water.goal":{"goal":24,"startDate":"2019-03-21"}}
 
     if (doc.containsKey("fitbit.get.water")) {
-      water = doc["fitbit.get.water"]["water"];
+      JsonVariant wv = doc["fitbit.get.water"];
+      if (wv.is<JsonObject>()) {
+        water = wv["water"];
+      } else {
+        water = wv.as<float>();
+      }
     }
     if (doc.containsKey("fitbit.get.water.goal")) {
-      goal = doc["fitbit.get.water.goal"]["goal"];
+      JsonVariant gv = doc["fitbit.get.water.goal"];
+      if (gv.is<JsonObject>()) {
+        goal = gv["goal"];
+      } else {
+        goal = gv.as<float>();
+      }
     }
 
     if (goal > 0.0f) {
@@ -35,6 +46,12 @@ public:
     Serial.print(water);
     Serial.print(" ratio: ");
     Serial.println(context.waterGoalReachedPercent);
+    TelnetStream.print("Water goal: ");
+    TelnetStream.print(goal);
+    TelnetStream.print(" Water: ");
+    TelnetStream.print(water);
+    TelnetStream.print(" ratio: ");
+    TelnetStream.println(context.waterGoalReachedPercent);
 
     Handler::handle(doc);
   }
