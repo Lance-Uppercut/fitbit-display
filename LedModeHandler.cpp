@@ -22,16 +22,26 @@ private:
   CRGBArray<NUM_LEDS> calsGoalLeds;
   CRGBArray<NUM_LEDS> stepsGoalLeds;
 
-  bool isOn = false;
   long red, green, blue, ledIndex;
   String currentModeAsString = String("off");
   int currentModeInt = LEDS_OFF;
 
-  void drawCompletion(CRGB leds[], float completionPercent, CRGB color) {
+  int completionToLedCount(float completionPercent) {
+    float normalized = constrain(completionPercent, 0.0f, 1.0f);
+    if (normalized <= 0.0f) {
+      return 0;
+    }
+    int ledCount = static_cast<int>(normalized * NUM_LEDS);
+    if (ledCount <= 0) {
+      ledCount = 1;
+    } else if (ledCount > NUM_LEDS) {
+      ledCount = NUM_LEDS;
+    }
+    return ledCount;
+  }
 
-    // Calculate how many LEDs should be green
-    //    int numGreenLeds = (completionPercent / 100.0) * NUM_LEDS;
-    int numGreenLeds = (completionPercent)*NUM_LEDS;
+  void drawCompletion(CRGB leds[], float completionPercent, CRGB color) {
+    int numGreenLeds = completionToLedCount(completionPercent);
     //Serial.print("Percent to draw is ");
     //Serial.println(numGreenLeds);
     // Set the appropriate number of LEDs to green
@@ -80,7 +90,6 @@ public:
       String currentMode = doc["setMode"];
       currentModeAsString = currentMode;
       if (currentMode.compareTo("contextDriven") == 0) {
-        isOn = true;
         Serial.println("Setting context driven");
         currentModeInt = FITBIT_GOALS;
       } else if (currentMode.compareTo("disco") == 0) {
@@ -116,18 +125,12 @@ public:
 
     switch (currentModeInt) {
       case FITBIT_GOALS:
-        if (isOn) {
-
-          drawCompletion(waterGoalLeds, context.waterGoalReachedPercent, CRGB::Blue);
-          drawCompletion(sleepLeds, context.sleepGoalReachedPercent, CRGB::Green);
-          drawCompletion(calsGoalLeds, context.caloriesGoalReachedPercent, CRGB::Red);
-          drawCompletion(stepsGoalLeds, context.stepsGoalReachedPercent, CRGB(255, 165, 0));
-          FastLED.show();
-          delay(50);
-        }
-        //        Serial.println("Updated for fitbit goals");
-        isOn = false;
-        //        delay(75);
+        drawCompletion(waterGoalLeds, context.waterGoalReachedPercent, CRGB::Blue);
+        drawCompletion(sleepLeds, context.sleepGoalReachedPercent, CRGB::Green);
+        drawCompletion(calsGoalLeds, context.caloriesGoalReachedPercent, CRGB::Red);
+        drawCompletion(stepsGoalLeds, context.stepsGoalReachedPercent, CRGB(255, 165, 0));
+        FastLED.show();
+        delay(50);
 
         // statements
         break;
